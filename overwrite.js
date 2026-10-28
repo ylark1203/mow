@@ -37,14 +37,18 @@ function main(config) {
   // 排查阶段建议 false；确认本地、路由器和机场 IPv6 均稳定后可改为 true。
   const ENABLE_IPV6 = false;
 
-  // Mihomo 官方推荐的连通性测试地址之一，正常返回 HTTP 204。
-  const HEALTH_CHECK_URL = "https://cp.cloudflare.com";
+  // Mihomo 官方推荐的连通性测试端点，正常返回 HTTP 204。
+  const HEALTH_CHECK_URL = "https://cp.cloudflare.com/generate_204";
   const HEALTH_CHECK_INTERVAL = 300; // 秒
   const HEALTH_CHECK_TIMEOUT = 5000; // 毫秒
   const HEALTH_CHECK_EXPECTED_STATUS = 204;
   const HEALTH_CHECK_MAX_FAILED_TIMES = 2;
 
+  // UDP 与 DoH 混合：Mihomo 并发查询并取最快应答，
+  // UDP 提供解析速度，DoH 兜底防污染。
   const DOMESTIC_DNS = [
+    "223.5.5.5",
+    "119.29.29.29",
     "https://dns.alidns.com/dns-query",
     "https://doh.pub/dns-query"
   ];
