@@ -8,7 +8,7 @@
 
 主要功能：
 
-- 强制将策略组精简为四个：`节点选择`（select，全部节点）、`美国节点`（select，按名称正则筛选美国节点）、`故障转移`（fallback，自动切换健康节点）、`GLOBAL`（select，总入口）。
+- 强制将策略组精简为四个：`节点选择`（select，全部节点）、`🇺🇸 US`（select，按名称正则筛选美国节点）、`故障转移`（fallback，自动切换健康节点）、`GLOBAL`（select，总入口）。
 - 为所有 proxy-provider 强制开启健康检查。
 - 重写路由规则中引用已删除策略组的策略名（兼容 `SUB-RULE` 与 `no-resolve` 后缀），删除旧 `MATCH` 规则并在末尾统一追加 `MATCH,GLOBAL`。
 - 在中国大陆 AI 产品主站（DeepSeek、Kimi、豆包等）置顶 DIRECT 分流规则；ChatGPT/OpenAI 域名走美国节点；常用测速网站走节点选择。

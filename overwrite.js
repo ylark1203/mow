@@ -3,16 +3,16 @@
  *
  * 最终仅保留四个策略组：
  * 1. 节点选择：手动选择订阅中的全部节点；
- * 2. 美国节点：自动筛选并优选美国线路；
+ * 2. 🇺🇸 US：自动筛选并优选美国线路；
  * 3. 故障转移：当前线路不可用时按顺序切换；
- * 4. GLOBAL：总入口，可在故障转移、节点选择、美国节点和 DIRECT 之间选择。
+ * 4. GLOBAL：总入口，可在故障转移、节点选择、🇺🇸 US 和 DIRECT 之间选择。
  *
  * 主要功能：
  * - 不排除任何“流量、到期、公告”等伪节点；
  * - 为 proxy-provider 强制开启健康检查；
- * - 美国节点使用 select，在筛选出的美国线路中手动选择；
+ * - 🇺🇸 US 使用 select，在筛选出的美国线路中手动选择；
  * - 中国大陆 AI 产品主站强制 DIRECT；
- * - ChatGPT/OpenAI 走美国节点；
+ * - ChatGPT/OpenAI 走 🇺🇸 US；
  * - 常用测速网站走节点选择；
  * - 删除旧 MATCH，统一追加 MATCH,GLOBAL；
  * - 重写被删除策略组的规则引用，并兼容 SUB-RULE；
@@ -24,7 +24,7 @@ function main(config) {
   // ========================
 
   const NODE_GROUP = "节点选择";
-  const US_GROUP = "美国节点";
+  const US_GROUP = "🇺🇸 US";
   const FALLBACK_GROUP = "故障转移";
   const GLOBAL_GROUP = "GLOBAL";
 
@@ -341,7 +341,7 @@ function main(config) {
     nodeSelectionGroup["include-all"] = true;
   }
 
-  // 2. 美国节点：静态节点直接筛选，provider 节点通过 filter 筛选，供手动选择。
+  // 2. 🇺🇸 US：静态节点直接筛选，provider 节点通过 filter 筛选，供手动选择。
   const staticUsNodes = uniqueNodeNames.filter((name) =>
     US_NODE_REGEX.test(name)
   );
@@ -390,7 +390,7 @@ function main(config) {
     fallbackGroup["include-all"] = true;
   }
 
-  // 4. GLOBAL：按“节点选择 → 美国节点 → 故障转移”的顺序提供选项。
+  // 4. GLOBAL：按“节点选择 → 🇺🇸 US → 故障转移”的顺序提供选项。
   const globalGroup = {
     name: GLOBAL_GROUP,
     type: "select",
@@ -445,7 +445,7 @@ function main(config) {
       return NODE_GROUP;
     }
 
-    // 原美国类策略组改为新的“美国节点”。
+    // 原美国类策略组改为新的“🇺🇸 US”。
     if (US_POLICY_REGEX.test(policy)) {
       return US_GROUP;
     }
