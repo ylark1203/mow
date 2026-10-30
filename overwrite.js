@@ -16,7 +16,6 @@
  * - 常用测速网站走节点选择；
  * - 删除旧 MATCH，统一追加 MATCH,GLOBAL；
  * - 重写被删除策略组的规则引用，并兼容 SUB-RULE；
- * - 使用 Fake-IP、DNS 分流、节点域名独立解析和 ARC 缓存；
  * - 开启 unified-delay、tcp-concurrent 和策略选择持久化。
  */
 function main(config) {
@@ -47,39 +46,8 @@ function main(config) {
   const HEALTH_CHECK_EXPECTED_STATUS = 204;
   const HEALTH_CHECK_MAX_FAILED_TIMES = 2;
 
-  // UDP 与 DoH 混合：Mihomo 并发查询并取最快应答，
-  // UDP 提供解析速度，DoH 兜底防污染。
-  // 【排查】临时注释全部 DoH 条目，仅保留明文 UDP，确认是否为 DoH 导致异常。
-  const DOMESTIC_DNS = [
-    "223.5.5.5",
-    "119.29.29.29"
-    // "https://dns.alidns.com/dns-query",
-    // "https://doh.pub/dns-query"
-  ];
-
-  // 境外 DNS 通过“故障转移”策略组访问，避免本地直连境外 DoH 不稳定。
-  // 【排查】临时清空（该列表全部为 DoH），下方 fallback 与相关 nameserver-policy 一并注释。
-  const FOREIGN_DNS = [
-    // `https://cloudflare-dns.com/dns-query#${FALLBACK_GROUP}`,
-    // `https://dns.google/dns-query#${FALLBACK_GROUP}`
-  ];
-
-  // 专门解析机场节点服务器域名的 DNS。
-  // 只使用加密 DNS（DoH/DoT）：Mihomo 并发查询时取最快应答，
-  // 若混入明文 UDP，被污染/劫持的应答会最先返回并胜出，导致节点拿到错误 IP。
-  // 若机场对境内查询做了分区域解析、返回的入口 IP 不通，
-  // 可在下方追加其他 DNS，或向机场索取固定入口 IP 改用 hosts。
-  // 【排查】临时清空（该列表全部为加密 DNS），下方 proxy-server-nameserver 一并注释。
-  const PROXY_SERVER_DNS = [
-    // "https://dns.alidns.com/dns-query",
-    // "https://doh.pub/dns-query",
-    // "tls://dns.alidns.com",
-    // "tls://dot.pub"
-  ];
-
   // 中国大陆 AI 产品的主站域名。
   // 仅列出产品专用域名，避免使用 baidu.com、qq.com、aliyun.com 等过宽规则。
-  // 这些域名同时用于 DIRECT 分流和国内 DNS 解析。
   const CN_AI_DOMAINS = [
     // DeepSeek
     "deepseek.com",
@@ -594,106 +562,11 @@ function main(config) {
   ];
 
   // ========================
-  // 七、DNS 稳定性与解析速度优化
+  // 七、通用性能与持久化优化
   // ========================
 
+  // 关闭 IPv6，避免本地、路由器或机场 IPv6 不稳定导致连接异常。
   config.ipv6 = ENABLE_IPV6;
-
-  // 即使域名使用 .ai、.com 等国际后缀，也强制由国内 DNS 解析，
-  // 与上面的 DIRECT 路由保持一致，避免“直连流量 + 境外代理 DNS”路径分裂。
-  const cnAiDnsPolicy = Object.fromEntries(
-    CN_AI_DOMAINS.map((domain) => [`+.${domain}`, DOMESTIC_DNS])
-  );
-
-  config.dns = {
-    enable: true,
-
-    // 只在本机监听，避免向局域网暴露 DNS 服务。
-    listen: "127.0.0.1:1053",
-
-    ipv6: ENABLE_IPV6,
-    "cache-algorithm": "arc",
-
-    "enhanced-mode": "fake-ip",
-    "fake-ip-range": "198.18.0.1/16",
-    "fake-ip-filter-mode": "blacklist",
-
-    // 以下域名返回真实 IP，以提高局域网、系统联网检测和时间同步兼容性。
-    "fake-ip-filter": [
-      "*.lan",
-      "+.lan",
-      "+.local",
-      "+.home.arpa",
-      "localhost",
-      "+.msftconnecttest.com",
-      "+.msftncsi.com",
-      "time.*.com",
-      "time.*.gov",
-      "time.*.edu.cn",
-      "ntp.*.com",
-      "ntp.*.edu.cn",
-      "+.pool.ntp.org"
-    ],
-
-    // 仅用于解析 DoH 服务器自身域名，必须可直接访问。
-    "default-nameserver": [
-      "8.8.8.8",
-      "223.5.5.5",
-      "119.29.29.29"
-    ],
-
-    // 专门解析机场节点服务器域名，避免代理尚未建立时出现 DNS 依赖循环。
-    // 只用加密 DNS，防止明文 UDP 应答被污染导致节点连到错误 IP。
-    // 【排查】临时注释，节点域名改走默认解析流程（跟随 nameserver）。
-    // "proxy-server-nameserver": PROXY_SERVER_DNS,
-
-    // DIRECT 出口使用国内 DNS，保证国内 CDN 和本地网络表现。
-    "direct-nameserver": DOMESTIC_DNS,
-    "direct-nameserver-follow-policy": false,
-
-    // 默认解析器：国内 UDP（排查期间已停用 DoH）。
-    nameserver: DOMESTIC_DNS,
-
-    // 默认解析器不可用或命中境外域名时，改经故障转移组访问备用 DoH。
-    // 【排查】临时注释，境外域名直接由上方国内 UDP 解析。
-    // fallback: FOREIGN_DNS,
-    // "fallback-filter": {
-    //   geoip: true,
-    //   "geoip-code": "CN",
-    //   geosite: ["gfw"]
-    // },
-
-    // 国内/私有域名使用国内 DNS；境外域名和 OpenAI 域名通过代理查询境外 DoH。
-    "nameserver-policy": {
-      "geosite:private": DOMESTIC_DNS,
-      "geosite:cn": DOMESTIC_DNS,
-
-      // 中国 AI 产品与 DIRECT 路由保持一致，统一使用国内 DNS。
-      ...cnAiDnsPolicy
-
-      // 【排查】以下条目均使用境外 DoH，临时注释。
-      // "+.chatgpt.com": FOREIGN_DNS,
-      // "+.openai.com": FOREIGN_DNS,
-      // "+.oaistatic.com": FOREIGN_DNS,
-      // "+.oaiusercontent.com": FOREIGN_DNS,
-
-      // "geosite:geolocation-!cn": FOREIGN_DNS
-    },
-
-    // DNS 出站已通过 #故障转移显式指定，不再递归遵循普通分流规则。
-    "respect-rules": false,
-
-    // 禁止 DoH 优先使用 HTTP/3，减少 UDP/QUIC 链路不稳定带来的影响。
-    // 【排查】已停用全部 DoH，该选项一并注释。
-    // "prefer-h3": false,
-
-    "use-hosts": true,
-    "use-system-hosts": true
-  };
-
-  // ========================
-  // 八、通用性能与持久化优化
-  // ========================
 
   // 统一不同协议的延迟测试口径。
   config["unified-delay"] = true;
