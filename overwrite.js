@@ -59,6 +59,18 @@ function main(config) {
     `https://dns.google/dns-query#${FALLBACK_GROUP}`
   ];
 
+  // 专门解析机场节点服务器域名的 DNS。
+  // 只使用加密 DNS（DoH/DoT）：Mihomo 并发查询时取最快应答，
+  // 若混入明文 UDP，被污染/劫持的应答会最先返回并胜出，导致节点拿到错误 IP。
+  // 若机场对境内查询做了分区域解析、返回的入口 IP 不通，
+  // 可在下方追加其他 DNS，或向机场索取固定入口 IP 改用 hosts。
+  const PROXY_SERVER_DNS = [
+    "https://dns.alidns.com/dns-query",
+    "https://doh.pub/dns-query",
+    "tls://dns.alidns.com",
+    "tls://dot.pub"
+  ];
+
   // 中国大陆 AI 产品的主站域名。
   // 仅列出产品专用域名，避免使用 baidu.com、qq.com、aliyun.com 等过宽规则。
   // 这些域名同时用于 DIRECT 分流和国内 DNS 解析。
@@ -619,12 +631,14 @@ function main(config) {
 
     // 仅用于解析 DoH 服务器自身域名，必须可直接访问。
     "default-nameserver": [
+      "8.8.8.8",
       "223.5.5.5",
       "119.29.29.29"
     ],
 
     // 专门解析机场节点服务器域名，避免代理尚未建立时出现 DNS 依赖循环。
-    "proxy-server-nameserver": DOMESTIC_DNS,
+    // 只用加密 DNS，防止明文 UDP 应答被污染导致节点连到错误 IP。
+    "proxy-server-nameserver": PROXY_SERVER_DNS,
 
     // DIRECT 出口使用国内 DNS，保证国内 CDN 和本地网络表现。
     "direct-nameserver": DOMESTIC_DNS,

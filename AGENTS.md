@@ -26,7 +26,7 @@
 
 `overwrite.js` 单文件按注释编号分为八个部分：
 
-1. 一、用户可调参数：策略组名称常量、`MANUAL_AIRPORT_GROUP`（机场总策略组手动指定）、`ENABLE_IPV6`、健康检查参数、国内/境外 DNS、中国大陆 AI 域名列表、美国节点识别正则。
+1. 一、用户可调参数：策略组名称常量、`MANUAL_AIRPORT_GROUP`（机场总策略组手动指定）、`ENABLE_IPV6`、健康检查参数、国内/境外 DNS、节点域名专用 DNS（`PROXY_SERVER_DNS`，仅加密 DNS）、中国大陆 AI 域名列表、美国节点识别正则。
 2. 二、读取原始配置：解析 rules、proxies、proxy-groups、proxy-providers。
 3. 三、为 provider 开启健康检查。
 4. 四、识别机场原策略组（`detectAirportGroup`，含递归统计可达节点 `collectReachableNodes`）。
@@ -42,6 +42,7 @@
 - 没有自动化测试。验证方式：修改后在 Clash Verge Rev / Mihomo Party 中实际加载该覆写脚本，检查生成配置中策略组数量、规则顺序（专用规则在前、`MATCH,GLOBAL` 收尾）、DNS 字段是否符合预期。
 - 幂等性是重要约定：脚本对同一份已覆写配置重复执行必须得到相同结果（识别原策略组时已排除自身创建的四个组）。修改时不得破坏幂等性。
 - 双写注意：`CN_AI_DOMAINS` 同时用于 DIRECT 路由规则和 DNS `nameserver-policy`，修改时需保持两者一致；美国节点识别存在两份表达式——JS 正则 `US_NODE_REGEX` 与 RE2 字符串 `US_PROVIDER_FILTER`（provider filter 用），修改时须同步。
+- `PROXY_SERVER_DNS` 只能使用加密 DNS（DoH/DoT）：`proxy-server-nameserver` 并发查询取最快应答，混入明文 UDP 会让可能被污染的应答胜出。
 
 ## 安全注意事项
 
