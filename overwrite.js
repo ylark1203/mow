@@ -37,8 +37,11 @@ function main(config) {
   // 排查阶段建议 false；确认本地、路由器和机场 IPv6 均稳定后可改为 true。
   const ENABLE_IPV6 = false;
 
-  // Mihomo 官方推荐的连通性测试端点，正常返回 HTTP 204。
-  const HEALTH_CHECK_URL = "https://cp.cloudflare.com/generate_204";
+  // 连通性测试端点，正常返回 HTTP 204。
+  // 使用 Google generate_204（多数订阅/机场的默认端点）：
+  // 代理节点普遍保证可访问 Google，而 Cloudflare 在部分线路上被阻断或路由极差，
+  // 会导致节点被误判为不可用。使用 HTTP 而非 HTTPS，避免 TLS 握手问题放大误判。
+  const HEALTH_CHECK_URL = "http://www.gstatic.com/generate_204";
   const HEALTH_CHECK_INTERVAL = 300; // 秒
   const HEALTH_CHECK_TIMEOUT = 5000; // 毫秒
   const HEALTH_CHECK_EXPECTED_STATUS = 204;
