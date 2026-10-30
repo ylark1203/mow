@@ -49,17 +49,19 @@ function main(config) {
 
   // UDP 与 DoH 混合：Mihomo 并发查询并取最快应答，
   // UDP 提供解析速度，DoH 兜底防污染。
+  // 【排查】临时注释全部 DoH 条目，仅保留明文 UDP，确认是否为 DoH 导致异常。
   const DOMESTIC_DNS = [
     "223.5.5.5",
-    "119.29.29.29",
-    "https://dns.alidns.com/dns-query",
-    "https://doh.pub/dns-query"
+    "119.29.29.29"
+    // "https://dns.alidns.com/dns-query",
+    // "https://doh.pub/dns-query"
   ];
 
   // 境外 DNS 通过“故障转移”策略组访问，避免本地直连境外 DoH 不稳定。
+  // 【排查】临时清空（该列表全部为 DoH），下方 fallback 与相关 nameserver-policy 一并注释。
   const FOREIGN_DNS = [
-    `https://cloudflare-dns.com/dns-query#${FALLBACK_GROUP}`,
-    `https://dns.google/dns-query#${FALLBACK_GROUP}`
+    // `https://cloudflare-dns.com/dns-query#${FALLBACK_GROUP}`,
+    // `https://dns.google/dns-query#${FALLBACK_GROUP}`
   ];
 
   // 专门解析机场节点服务器域名的 DNS。
@@ -67,11 +69,12 @@ function main(config) {
   // 若混入明文 UDP，被污染/劫持的应答会最先返回并胜出，导致节点拿到错误 IP。
   // 若机场对境内查询做了分区域解析、返回的入口 IP 不通，
   // 可在下方追加其他 DNS，或向机场索取固定入口 IP 改用 hosts。
+  // 【排查】临时清空（该列表全部为加密 DNS），下方 proxy-server-nameserver 一并注释。
   const PROXY_SERVER_DNS = [
-    "https://dns.alidns.com/dns-query",
-    "https://doh.pub/dns-query",
-    "tls://dns.alidns.com",
-    "tls://dot.pub"
+    // "https://dns.alidns.com/dns-query",
+    // "https://doh.pub/dns-query",
+    // "tls://dns.alidns.com",
+    // "tls://dot.pub"
   ];
 
   // 中国大陆 AI 产品的主站域名。
@@ -641,22 +644,24 @@ function main(config) {
 
     // 专门解析机场节点服务器域名，避免代理尚未建立时出现 DNS 依赖循环。
     // 只用加密 DNS，防止明文 UDP 应答被污染导致节点连到错误 IP。
-    "proxy-server-nameserver": PROXY_SERVER_DNS,
+    // 【排查】临时注释，节点域名改走默认解析流程（跟随 nameserver）。
+    // "proxy-server-nameserver": PROXY_SERVER_DNS,
 
     // DIRECT 出口使用国内 DNS，保证国内 CDN 和本地网络表现。
     "direct-nameserver": DOMESTIC_DNS,
     "direct-nameserver-follow-policy": false,
 
-    // 默认解析器：国内 DoH。
+    // 默认解析器：国内 UDP（排查期间已停用 DoH）。
     nameserver: DOMESTIC_DNS,
 
     // 默认解析器不可用或命中境外域名时，改经故障转移组访问备用 DoH。
-    fallback: FOREIGN_DNS,
-    "fallback-filter": {
-      geoip: true,
-      "geoip-code": "CN",
-      geosite: ["gfw"]
-    },
+    // 【排查】临时注释，境外域名直接由上方国内 UDP 解析。
+    // fallback: FOREIGN_DNS,
+    // "fallback-filter": {
+    //   geoip: true,
+    //   "geoip-code": "CN",
+    //   geosite: ["gfw"]
+    // },
 
     // 国内/私有域名使用国内 DNS；境外域名和 OpenAI 域名通过代理查询境外 DoH。
     "nameserver-policy": {
@@ -664,21 +669,23 @@ function main(config) {
       "geosite:cn": DOMESTIC_DNS,
 
       // 中国 AI 产品与 DIRECT 路由保持一致，统一使用国内 DNS。
-      ...cnAiDnsPolicy,
+      ...cnAiDnsPolicy
 
-      "+.chatgpt.com": FOREIGN_DNS,
-      "+.openai.com": FOREIGN_DNS,
-      "+.oaistatic.com": FOREIGN_DNS,
-      "+.oaiusercontent.com": FOREIGN_DNS,
+      // 【排查】以下条目均使用境外 DoH，临时注释。
+      // "+.chatgpt.com": FOREIGN_DNS,
+      // "+.openai.com": FOREIGN_DNS,
+      // "+.oaistatic.com": FOREIGN_DNS,
+      // "+.oaiusercontent.com": FOREIGN_DNS,
 
-      "geosite:geolocation-!cn": FOREIGN_DNS
+      // "geosite:geolocation-!cn": FOREIGN_DNS
     },
 
     // DNS 出站已通过 #故障转移显式指定，不再递归遵循普通分流规则。
     "respect-rules": false,
 
     // 禁止 DoH 优先使用 HTTP/3，减少 UDP/QUIC 链路不稳定带来的影响。
-    "prefer-h3": false,
+    // 【排查】已停用全部 DoH，该选项一并注释。
+    // "prefer-h3": false,
 
     "use-hosts": true,
     "use-system-hosts": true
