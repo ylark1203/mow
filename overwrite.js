@@ -1,11 +1,12 @@
 /**
  * Clash Verge Rev / Mihomo Party 通用脚本覆写（稳定性与速度优化版）
  *
- * 最终仅保留四个策略组：
+ * 最终仅保留五个策略组：
  * 1. 节点选择：手动选择订阅中的全部节点；
  * 2. 🇺🇸 US：自动筛选并优选美国线路；
  * 3. 故障转移：当前线路不可用时按顺序切换；
- * 4. GLOBAL：总入口，可在故障转移、节点选择、🇺🇸 US 和 DIRECT 之间选择。
+ * 4. GLOBAL：总入口，可在故障转移、节点选择、🇺🇸 US 和 DIRECT 之间选择；
+ * 5. Others：未命中任何规则的流量默认出口，可在全部节点和 DIRECT 之间选择。
  *
  * 主要功能：
  * - 不排除任何“流量、到期、公告”等伪节点；
@@ -14,7 +15,7 @@
  * - 中国大陆 AI 产品主站强制 DIRECT；
  * - ChatGPT/OpenAI 走 🇺🇸 US；
  * - 常用测速网站走节点选择；
- * - 删除旧 MATCH，统一追加 MATCH,GLOBAL；
+ * - 删除旧 MATCH，统一追加 MATCH,Others；
  * - 重写被删除策略组的规则引用，并兼容 SUB-RULE；
  * - 开启 unified-delay、tcp-concurrent 和策略选择持久化。
  */
@@ -27,6 +28,7 @@ function main(config) {
   const US_GROUP = "🇺🇸 US";
   const FALLBACK_GROUP = "故障转移";
   const GLOBAL_GROUP = "GLOBAL";
+  const OTHERS_GROUP = "Others";
 
   // 正常保持为空，由脚本自动识别机场原总策略组。
   // 自动识别错误时填写原策略组名称，例如：
@@ -163,7 +165,7 @@ function main(config) {
   // 四、识别机场原策略组
   // ========================
 
-  // 排除脚本自身可能已创建的四个组，确保重复执行仍然幂等。
+  // 排除脚本自身可能已创建的五个组，确保重复执行仍然幂等。
   const originalGroups = groups.filter(
     (group) =>
       group &&
@@ -171,7 +173,8 @@ function main(config) {
       group.name !== NODE_GROUP &&
       group.name !== US_GROUP &&
       group.name !== FALLBACK_GROUP &&
-      group.name !== GLOBAL_GROUP
+      group.name !== GLOBAL_GROUP &&
+      group.name !== OTHERS_GROUP
   );
 
   const originalGroupNames = new Set(
@@ -303,6 +306,7 @@ function main(config) {
         policy === US_GROUP ||
         policy === FALLBACK_GROUP ||
         policy === GLOBAL_GROUP ||
+        policy === OTHERS_GROUP ||
         nodeNameSet.has(policy)
       ) {
         continue;
@@ -320,7 +324,7 @@ function main(config) {
   const airportGroupName = detectAirportGroup();
 
   // ========================
-  // 五、创建四个策略组
+  // 五、创建五个策略组
   // ========================
 
   // 1. 节点选择：全部静态节点 + 全部 provider，供手动选择。
@@ -402,12 +406,33 @@ function main(config) {
     ]
   };
 
-  // 强制只保留四个策略组。
+  // 5. Others：未命中任何规则的兜底出口，可在全部节点和 DIRECT 之间选择。
+  const othersGroup = {
+    name: OTHERS_GROUP,
+    type: "select"
+  };
+
+  if (uniqueNodeNames.length > 0) {
+    othersGroup.proxies = [...uniqueNodeNames, "DIRECT"];
+  } else {
+    othersGroup.proxies = ["DIRECT"];
+  }
+
+  if (providerNames.length > 0) {
+    othersGroup.use = providerNames;
+  }
+
+  if (uniqueNodeNames.length === 0 && providerNames.length === 0) {
+    othersGroup["include-all"] = true;
+  }
+
+  // 强制只保留五个策略组。
   config["proxy-groups"] = [
     nodeSelectionGroup,
     usSelectionGroup,
     fallbackGroup,
-    globalGroup
+    globalGroup,
+    othersGroup
   ];
 
   // ========================
@@ -428,14 +453,15 @@ function main(config) {
   }
 
   function resolveOldPolicy(policy) {
-    // 内置策略、静态真实节点和四个新策略组保持不变。
+    // 内置策略、静态真实节点和五个新策略组保持不变。
     if (
       BUILTIN_POLICIES.has(policy) ||
       nodeNameSet.has(policy) ||
       policy === NODE_GROUP ||
       policy === US_GROUP ||
       policy === FALLBACK_GROUP ||
-      policy === GLOBAL_GROUP
+      policy === GLOBAL_GROUP ||
+      policy === OTHERS_GROUP
     ) {
       return policy;
     }
@@ -558,7 +584,7 @@ function main(config) {
     ...speedTestRules,
     ...ipCheckRules,
     ...rewrittenRules,
-    `MATCH,${GLOBAL_GROUP}`
+    `MATCH,${OTHERS_GROUP}`
   ];
 
   // ========================
