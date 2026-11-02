@@ -2,11 +2,11 @@
  * Clash Verge Rev / Mihomo Party 通用脚本覆写（稳定性与速度优化版）
  *
  * 最终仅保留五个策略组：
- * 1. 节点选择：手动选择订阅中的全部节点；
+ * 1. 🚀 Proxy：手动选择订阅中的全部节点；
  * 2. 🇺🇸 US：自动筛选并优选美国线路；
- * 3. 故障转移：当前线路不可用时按顺序切换；
- * 4. GLOBAL：总入口，可在故障转移、节点选择、🇺🇸 US 和 DIRECT 之间选择；
- * 5. Others：未命中任何规则的流量默认出口，可在全部节点和 DIRECT 之间选择。
+ * 3. 🔄 Fallback：当前线路不可用时按顺序切换；
+ * 4. 🌐 GLOBAL：总入口，可在 🚀 Proxy、🇺🇸 US、🔄 Fallback 和 DIRECT 之间选择；
+ * 5. 🐟 Others：未命中任何规则的流量默认出口，可在全部节点和 DIRECT 之间选择。
  *
  * 主要功能：
  * - 不排除任何“流量、到期、公告”等伪节点；
@@ -14,8 +14,8 @@
  * - 🇺🇸 US 使用 select，在筛选出的美国线路中手动选择；
  * - 中国大陆 AI 产品主站强制 DIRECT；
  * - ChatGPT/OpenAI 走 🇺🇸 US；
- * - 常用测速网站走节点选择；
- * - 删除旧 MATCH，统一追加 MATCH,Others；
+ * - 常用测速网站走 🚀 Proxy；
+ * - 删除旧 MATCH，统一追加 MATCH,🐟 Others；
  * - 重写被删除策略组的规则引用，并兼容 SUB-RULE；
  * - 开启 unified-delay、tcp-concurrent 和策略选择持久化。
  */
@@ -24,11 +24,11 @@ function main(config) {
   // 一、用户可调参数
   // ========================
 
-  const NODE_GROUP = "节点选择";
+  const NODE_GROUP = "🚀 Proxy";
   const US_GROUP = "🇺🇸 US";
-  const FALLBACK_GROUP = "故障转移";
-  const GLOBAL_GROUP = "GLOBAL";
-  const OTHERS_GROUP = "Others";
+  const FALLBACK_GROUP = "🔄 Fallback";
+  const GLOBAL_GROUP = "🌐 GLOBAL";
+  const OTHERS_GROUP = "🐟 Others";
 
   // 正常保持为空，由脚本自动识别机场原总策略组。
   // 自动识别错误时填写原策略组名称，例如：
@@ -327,7 +327,7 @@ function main(config) {
   // 五、创建五个策略组
   // ========================
 
-  // 1. 节点选择：全部静态节点 + 全部 provider，供手动选择。
+  // 1. 🚀 Proxy：全部静态节点 + 全部 provider，供手动选择。
   const nodeSelectionGroup = {
     name: NODE_GROUP,
     type: "select"
@@ -370,7 +370,7 @@ function main(config) {
     usSelectionGroup.proxies = ["REJECT"];
   }
 
-  // 3. 故障转移：按节点顺序选择第一个健康节点。
+  // 3. 🔄 Fallback：按节点顺序选择第一个健康节点。
   const fallbackGroup = {
     name: FALLBACK_GROUP,
     type: "fallback",
@@ -394,7 +394,7 @@ function main(config) {
     fallbackGroup["include-all"] = true;
   }
 
-  // 4. GLOBAL：按“节点选择 → 🇺🇸 US → 故障转移”的顺序提供选项。
+  // 4. 🌐 GLOBAL：按“🚀 Proxy → 🇺🇸 US → 🔄 Fallback”的顺序提供选项。
   const globalGroup = {
     name: GLOBAL_GROUP,
     type: "select",
@@ -406,7 +406,7 @@ function main(config) {
     ]
   };
 
-  // 5. Others：未命中任何规则的兜底出口，可在全部节点和 DIRECT 之间选择。
+  // 5. 🐟 Others：未命中任何规则的兜底出口，可在全部节点和 DIRECT 之间选择。
   const othersGroup = {
     name: OTHERS_GROUP,
     type: "select"
@@ -466,7 +466,7 @@ function main(config) {
       return policy;
     }
 
-    // 原机场总策略组统一改为“节点选择”。
+    // 原机场总策略组统一改为“🚀 Proxy”。
     if (airportGroupName && policy === airportGroupName) {
       return NODE_GROUP;
     }
@@ -476,7 +476,7 @@ function main(config) {
       return US_GROUP;
     }
 
-    // 引用已删除原策略组的规则改为“节点选择”。
+    // 引用已删除原策略组的规则改为“🚀 Proxy”。
     if (originalGroupNames.has(policy)) {
       return NODE_GROUP;
     }
@@ -529,7 +529,7 @@ function main(config) {
     `DOMAIN-SUFFIX,oaiusercontent.com,${US_GROUP}`
   ];
 
-  // 常用测速网站走“节点选择”，便于测试当前手动节点。
+  // 常用测速网站走“🚀 Proxy”，便于测试当前手动节点。
   const speedTestRules = [
     `DOMAIN-SUFFIX,speedtest.net,${NODE_GROUP}`,
     `DOMAIN-SUFFIX,ookla.com,${NODE_GROUP}`,
