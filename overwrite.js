@@ -2,7 +2,7 @@
  * Clash Verge Rev / Mihomo Party 通用脚本覆写（稳定性与速度优化版）
  *
  * 最终仅保留四个策略组：
- * 1. 🚀 Proxy：手动选择订阅中的全部节点；
+ * 1. 🚀 Proxies：手动选择订阅中的全部节点；
  * 2. 🇺🇸 US：自动筛选并优选美国线路；
  * 3. 🔄 Fallback：当前线路不可用时按顺序切换；
  * 4. 🐟 Others：未命中任何规则的流量默认出口，可在全部节点和 DIRECT 之间选择。
@@ -13,7 +13,7 @@
  * - 🇺🇸 US 使用 select，在筛选出的美国线路中手动选择；
  * - 中国大陆 AI 产品主站强制 DIRECT；
  * - ChatGPT/OpenAI 走 🇺🇸 US；
- * - 常用测速网站走 🚀 Proxy；
+ * - 常用测速网站走 🚀 Proxies；
  * - 删除旧 MATCH，统一追加 MATCH,🐟 Others；
  * - 重写被删除策略组的规则引用，并兼容 SUB-RULE；
  * - 开启 unified-delay、tcp-concurrent 和策略选择持久化。
@@ -23,7 +23,7 @@ function main(config) {
   // 一、用户可调参数
   // ========================
 
-  const NODE_GROUP = "🚀 Proxy";
+  const NODE_GROUP = "🚀 Proxies";
   const US_GROUP = "🇺🇸 US";
   const FALLBACK_GROUP = "🔄 Fallback";
   const OTHERS_GROUP = "🐟 Others";
@@ -325,7 +325,7 @@ function main(config) {
   // 五、创建四个策略组
   // ========================
 
-  // 1. 🚀 Proxy：全部静态节点 + 全部 provider，供手动选择。
+  // 1. 🚀 Proxies：全部静态节点 + 全部 provider，供手动选择。
   const nodeSelectionGroup = {
     name: NODE_GROUP,
     type: "select"
@@ -450,7 +450,7 @@ function main(config) {
       return policy;
     }
 
-    // 原机场总策略组统一改为“🚀 Proxy”。
+    // 原机场总策略组统一改为“🚀 Proxies”。
     if (airportGroupName && policy === airportGroupName) {
       return NODE_GROUP;
     }
@@ -460,7 +460,7 @@ function main(config) {
       return US_GROUP;
     }
 
-    // 引用已删除原策略组的规则改为“🚀 Proxy”。
+    // 引用已删除原策略组的规则改为“🚀 Proxies”。
     if (originalGroupNames.has(policy)) {
       return NODE_GROUP;
     }
@@ -513,7 +513,7 @@ function main(config) {
     `DOMAIN-SUFFIX,oaiusercontent.com,${US_GROUP}`
   ];
 
-  // 常用测速网站走“🚀 Proxy”，便于测试当前手动节点。
+  // 常用测速网站走“🚀 Proxies”，便于测试当前手动节点。
   const speedTestRules = [
     `DOMAIN-SUFFIX,speedtest.net,${NODE_GROUP}`,
     `DOMAIN-SUFFIX,ookla.com,${NODE_GROUP}`,
