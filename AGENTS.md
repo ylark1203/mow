@@ -8,7 +8,7 @@
 
 主要功能：
 
-- 强制将策略组精简为五个：`🚀 Proxy`（select，全部节点）、`🇺🇸 US`（select，按名称正则筛选美国节点）、`🔄 Fallback`（fallback，自动切换健康节点）、`🌐 GLOBAL`（select，总入口）、`🐟 Others`（select，未命中规则的兜底出口，包含全部节点和 DIRECT）。
+- 强制将策略组精简为四个：`🚀 Proxy`（select，全部节点）、`🇺🇸 US`（select，按名称正则筛选美国节点）、`🔄 Fallback`（fallback，自动切换健康节点）、`🐟 Others`（select，未命中规则的兜底出口，包含全部节点和 DIRECT）。不自定义 `GLOBAL` 分组，由 Mihomo 内置 GLOBAL 兜底。
 - 为所有 proxy-provider 强制开启健康检查。
 - 重写路由规则中引用已删除策略组的策略名（兼容 `SUB-RULE` 与 `no-resolve` 后缀），删除旧 `MATCH` 规则并在末尾统一追加 `MATCH,🐟 Others`。
 - 在中国大陆 AI 产品主站（DeepSeek、Kimi、豆包等）置顶 DIRECT 分流规则；ChatGPT/OpenAI 域名走 `🇺🇸 US`；常用测速网站走 `🚀 Proxy`。
@@ -29,7 +29,7 @@
 2. 二、读取原始配置：解析 rules、proxies、proxy-groups、proxy-providers。
 3. 三、为 provider 开启健康检查。
 4. 四、识别机场原策略组（`detectAirportGroup`，含递归统计可达节点 `collectReachableNodes`）。
-5. 五、创建五个策略组并覆写 `config["proxy-groups"]`。
+5. 五、创建四个策略组并覆写 `config["proxy-groups"]`。
 6. 六、重写规则策略引用并追加专用分流规则（`config.rules` 只在此处统一写入一次，勿拆分赋值）。
 7. 七、通用性能与持久化优化（含 `config.ipv6`，**不覆写 `config.dns`**，DNS 完全沿用订阅或客户端默认配置）。
 
@@ -38,7 +38,7 @@
 - 注释与文档使用中文，新增注释应保持中文。
 - 代码风格：2 空格缩进，函数与常量集中定义在所属章节内；策略名、域名等可配置项集中在第一部分的用户可调参数区。
 - 没有自动化测试。验证方式：修改后在 Clash Verge Rev / Mihomo Party 中实际加载该覆写脚本，检查生成配置中策略组数量、规则顺序（专用规则在前、`MATCH,🐟 Others` 收尾）是否符合预期。
-- 幂等性是重要约定：脚本对同一份已覆写配置重复执行必须得到相同结果（识别原策略组时已排除自身创建的五个组）。修改时不得破坏幂等性。
+- 幂等性是重要约定：脚本对同一份已覆写配置重复执行必须得到相同结果（识别原策略组时已排除自身创建的四个组）。修改时不得破坏幂等性。
 - 双写注意：美国节点识别存在两份表达式——JS 正则 `US_NODE_REGEX` 与 RE2 字符串 `US_PROVIDER_FILTER`（provider filter 用），修改时须同步。
 
 ## 安全注意事项

@@ -1,12 +1,11 @@
 /**
  * Clash Verge Rev / Mihomo Party 通用脚本覆写（稳定性与速度优化版）
  *
- * 最终仅保留五个策略组：
+ * 最终仅保留四个策略组：
  * 1. 🚀 Proxy：手动选择订阅中的全部节点；
  * 2. 🇺🇸 US：自动筛选并优选美国线路；
  * 3. 🔄 Fallback：当前线路不可用时按顺序切换；
- * 4. 🌐 GLOBAL：总入口，可在 🚀 Proxy、🇺🇸 US、🔄 Fallback 和 DIRECT 之间选择；
- * 5. 🐟 Others：未命中任何规则的流量默认出口，可在全部节点和 DIRECT 之间选择。
+ * 4. 🐟 Others：未命中任何规则的流量默认出口，可在全部节点和 DIRECT 之间选择。
  *
  * 主要功能：
  * - 不排除任何“流量、到期、公告”等伪节点；
@@ -27,7 +26,6 @@ function main(config) {
   const NODE_GROUP = "🚀 Proxy";
   const US_GROUP = "🇺🇸 US";
   const FALLBACK_GROUP = "🔄 Fallback";
-  const GLOBAL_GROUP = "🌐 GLOBAL";
   const OTHERS_GROUP = "🐟 Others";
 
   // 正常保持为空，由脚本自动识别机场原总策略组。
@@ -110,13 +108,15 @@ function main(config) {
   const US_POLICY_REGEX =
     /(?:🇺🇸|美国|美國|United\s*States|America|\bUSA?\b)/i;
 
+  // GLOBAL 是 Mihomo 内置分组名，同样视为内置策略，避免被误识别或改写。
   const BUILTIN_POLICIES = new Set([
     "DIRECT",
     "REJECT",
     "REJECT-DROP",
     "PASS",
     "PASS-RULE",
-    "COMPATIBLE"
+    "COMPATIBLE",
+    "GLOBAL"
   ]);
 
   // ========================
@@ -165,7 +165,7 @@ function main(config) {
   // 四、识别机场原策略组
   // ========================
 
-  // 排除脚本自身可能已创建的五个组，确保重复执行仍然幂等。
+  // 排除脚本自身可能已创建的四个组，确保重复执行仍然幂等。
   const originalGroups = groups.filter(
     (group) =>
       group &&
@@ -173,7 +173,6 @@ function main(config) {
       group.name !== NODE_GROUP &&
       group.name !== US_GROUP &&
       group.name !== FALLBACK_GROUP &&
-      group.name !== GLOBAL_GROUP &&
       group.name !== OTHERS_GROUP
   );
 
@@ -305,7 +304,6 @@ function main(config) {
         policy === NODE_GROUP ||
         policy === US_GROUP ||
         policy === FALLBACK_GROUP ||
-        policy === GLOBAL_GROUP ||
         policy === OTHERS_GROUP ||
         nodeNameSet.has(policy)
       ) {
@@ -324,7 +322,7 @@ function main(config) {
   const airportGroupName = detectAirportGroup();
 
   // ========================
-  // 五、创建五个策略组
+  // 五、创建四个策略组
   // ========================
 
   // 1. 🚀 Proxy：全部静态节点 + 全部 provider，供手动选择。
@@ -394,19 +392,7 @@ function main(config) {
     fallbackGroup["include-all"] = true;
   }
 
-  // 4. 🌐 GLOBAL：按“🚀 Proxy → 🇺🇸 US → 🔄 Fallback”的顺序提供选项。
-  const globalGroup = {
-    name: GLOBAL_GROUP,
-    type: "select",
-    proxies: [
-      NODE_GROUP,
-      US_GROUP,
-      FALLBACK_GROUP,
-      "DIRECT"
-    ]
-  };
-
-  // 5. 🐟 Others：未命中任何规则的兜底出口，可在全部节点和 DIRECT 之间选择。
+  // 4. 🐟 Others：未命中任何规则的兜底出口，可在全部节点和 DIRECT 之间选择。
   const othersGroup = {
     name: OTHERS_GROUP,
     type: "select"
@@ -426,12 +412,11 @@ function main(config) {
     othersGroup["include-all"] = true;
   }
 
-  // 强制只保留五个策略组。
+  // 强制只保留四个策略组。
   config["proxy-groups"] = [
     nodeSelectionGroup,
     usSelectionGroup,
     fallbackGroup,
-    globalGroup,
     othersGroup
   ];
 
@@ -453,14 +438,13 @@ function main(config) {
   }
 
   function resolveOldPolicy(policy) {
-    // 内置策略、静态真实节点和五个新策略组保持不变。
+    // 内置策略、静态真实节点和四个新策略组保持不变。
     if (
       BUILTIN_POLICIES.has(policy) ||
       nodeNameSet.has(policy) ||
       policy === NODE_GROUP ||
       policy === US_GROUP ||
       policy === FALLBACK_GROUP ||
-      policy === GLOBAL_GROUP ||
       policy === OTHERS_GROUP
     ) {
       return policy;
