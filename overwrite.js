@@ -392,14 +392,14 @@ function main(config) {
     fallbackGroup["include-all"] = true;
   }
 
-  // 4. 🐟 Others：未命中任何规则的兜底出口，可在全部节点和 DIRECT 之间选择。
+  // 4. 🐟 Others：未命中任何规则的兜底出口，DIRECT 置首，可在全部节点和 DIRECT 之间选择。
   const othersGroup = {
     name: OTHERS_GROUP,
     type: "select"
   };
 
   if (uniqueNodeNames.length > 0) {
-    othersGroup.proxies = [...uniqueNodeNames, "DIRECT"];
+    othersGroup.proxies = ["DIRECT", ...uniqueNodeNames];
   } else {
     othersGroup.proxies = ["DIRECT"];
   }
