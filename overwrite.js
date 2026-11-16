@@ -7,8 +7,10 @@
  * 3. 🔄 Fallback：当前线路不可用时按顺序切换；
  * 4. 🐟 Others：未命中任何规则的流量默认出口，可在全部节点和 DIRECT 之间选择。
  * 订阅中的前置/中转/跳板分组（按名称或 dialer-proxy 引用识别）会被改建为
- * url-test 保留在分组末尾，由内核自动选择延迟最低的前置节点；
- * 前置节点只作为入口，不出现在上述四个出口分组中。
+ * url-test 保留在分组末尾，由内核自动选择延迟最低的前置节点，并以
+ * hidden 隐藏；前置节点只作为入口，不出现在上述四个出口分组中；
+ * 仅包装内置策略的分组（如“拦截”“关闭”）会被删除，引用它的规则
+ * 直接改写为对应内置策略。
  *
  * 主要功能：
  * - 不排除任何“流量、到期、公告”等伪节点；
@@ -115,6 +117,12 @@ function main(config) {
   // 命中的分组不会被删除，而是改建为 url-test，由内核自动选择延迟最低的前置节点。
   const RELAY_GROUP_REGEX = /(?:跳板|前置|中转|relay|transit)/i;
 
+  // 前置/中转分组的默认测速地址。
+  // 中转入口多为国内服务器，必须使用中国大陆可达的地址，否则中转节点会被全部误判失败；
+  // 原分组自带测速地址时优先沿用。
+  const RELAY_HEALTH_CHECK_URL =
+    "http://connectivitycheck.platform.hicloud.com/generate_204";
+
   // url-test 的延迟容差（毫秒），新节点延迟优于当前节点超过该值才切换，避免抖动。
   const RELAY_URL_TEST_TOLERANCE = 100;
 
@@ -220,6 +228,45 @@ function main(config) {
   const exitNodeNames = uniqueNodeNames.filter(
     (name) => !relayNodeNames.has(name)
   );
+
+  // 递归判断分组是否仅由内置策略构成：成员全是内置策略，
+  // 或成员是同样仅由内置策略构成的分组（如“🛑 广告拦截”→[不拦截, 拦截]）。
+  // 存在多个内置策略时按 REJECT > REJECT-DROP > PASS > DIRECT 优先（拦截优先）。
+  function resolveBuiltinOnly(groupName, visiting = new Set()) {
+    if (visiting.has(groupName)) return null;
+
+    const group = groupMap.get(groupName);
+    if (!group) return null;
+
+    const members = Array.isArray(group.proxies) ? group.proxies : [];
+    if (members.length === 0) return null;
+
+    const nextVisiting = new Set(visiting);
+    nextVisiting.add(groupName);
+
+    const resolved = [];
+    for (const member of members) {
+      if (BUILTIN_POLICIES.has(member)) {
+        resolved.push(member);
+      } else {
+        const nested = resolveBuiltinOnly(member, nextVisiting);
+        if (nested === null) return null;
+        resolved.push(nested);
+      }
+    }
+
+    for (const preferred of ["REJECT", "REJECT-DROP", "PASS", "DIRECT"]) {
+      if (resolved.includes(preferred)) return preferred;
+    }
+    return resolved[0];
+  }
+
+  // 仅包装内置策略的分组会被删除，规则引用它们时直接改写为解析出的内置策略。
+  const builtinWrapperByName = new Map();
+  for (const group of originalGroups) {
+    const target = resolveBuiltinOnly(group.name);
+    if (target) builtinWrapperByName.set(group.name, target);
+  }
 
   function getRuleType(rule) {
     if (typeof rule !== "string") return "";
@@ -346,6 +393,7 @@ function main(config) {
         policy === FALLBACK_GROUP ||
         policy === OTHERS_GROUP ||
         relayGroupNames.has(policy) ||
+        builtinWrapperByName.has(policy) ||
         nodeNameSet.has(policy)
       ) {
         continue;
@@ -455,23 +503,55 @@ function main(config) {
 
   // 前置/中转分组：改建为 url-test，内核按延迟自动选择最优前置节点，
   // 保留是因为出口节点的 dialer-proxy 可能引用它们，删除会导致配置失效。
-  const relayUrlTestGroups = relayGroups.map((group) => ({
-    ...group,
-    type: "url-test",
-    url: HEALTH_CHECK_URL,
-    interval: HEALTH_CHECK_INTERVAL,
-    timeout: HEALTH_CHECK_TIMEOUT,
-    tolerance: RELAY_URL_TEST_TOLERANCE,
-    lazy: true
-  }));
+  // 测速地址沿用原分组或默认国内可达地址；成员中纯内置策略及其包装组
+  // （如“关闭”→DIRECT）在 url-test 下测速无意义且会因延迟最低而永远胜出，予以剔除；
+  // hidden 让其在客户端中不显示。
+  const relayUrlTestGroups = relayGroups.map((group) => {
+    const members = (Array.isArray(group.proxies) ? group.proxies : []).filter(
+      (member) =>
+        !BUILTIN_POLICIES.has(member) && !builtinWrapperByName.has(member)
+    );
 
-  // 强制只保留四个固定策略组，外加识别到的前置/中转分组。
+    return {
+      ...group,
+      type: "url-test",
+      proxies: members.length > 0 ? members : ["DIRECT"],
+      url: group.url || RELAY_HEALTH_CHECK_URL,
+      interval: group.interval || HEALTH_CHECK_INTERVAL,
+      timeout: group.timeout || HEALTH_CHECK_TIMEOUT,
+      tolerance:
+        typeof group.tolerance === "number"
+          ? group.tolerance
+          : RELAY_URL_TEST_TOLERANCE,
+      lazy: true,
+      hidden: true
+    };
+  });
+
+  // 前置分组引用到的其他分组（如专用跳板子组）需一并保留，否则引用悬空。
+  const auxGroupNames = new Set();
+  const auxGroups = [];
+  (function collectAuxGroups(members) {
+    for (const member of members) {
+      if (auxGroupNames.has(member) || relayGroupNames.has(member)) continue;
+
+      const target = groupMap.get(member);
+      if (!target) continue;
+
+      auxGroupNames.add(member);
+      auxGroups.push({ ...target, hidden: true });
+      collectAuxGroups(Array.isArray(target.proxies) ? target.proxies : []);
+    }
+  })(relayUrlTestGroups.flatMap((group) => group.proxies || []));
+
+  // 强制只保留四个固定策略组，外加识别到的前置/中转分组及其引用的子分组。
   config["proxy-groups"] = [
     nodeSelectionGroup,
     usSelectionGroup,
     fallbackGroup,
     othersGroup,
-    ...relayUrlTestGroups
+    ...relayUrlTestGroups,
+    ...auxGroups
   ];
 
   // ========================
@@ -492,7 +572,7 @@ function main(config) {
   }
 
   function resolveOldPolicy(policy) {
-    // 内置策略、静态真实节点、四个新策略组和前置分组保持不变。
+    // 内置策略、静态真实节点、四个新策略组和保留的前置/辅助分组保持不变。
     if (
       BUILTIN_POLICIES.has(policy) ||
       nodeNameSet.has(policy) ||
@@ -500,9 +580,15 @@ function main(config) {
       policy === US_GROUP ||
       policy === FALLBACK_GROUP ||
       policy === OTHERS_GROUP ||
-      relayGroupNames.has(policy)
+      relayGroupNames.has(policy) ||
+      auxGroupNames.has(policy)
     ) {
       return policy;
+    }
+
+    // 引用仅包装内置策略的已删除分组（如“拦截”）时，改写为对应内置策略。
+    if (builtinWrapperByName.has(policy)) {
+      return builtinWrapperByName.get(policy);
     }
 
     // 原机场总策略组统一改为“🚀 Proxies”。
