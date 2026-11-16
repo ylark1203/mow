@@ -6,6 +6,9 @@
  * 2. 🇺🇸 US：自动筛选并优选美国线路；
  * 3. 🔄 Fallback：当前线路不可用时按顺序切换；
  * 4. 🐟 Others：未命中任何规则的流量默认出口，可在全部节点和 DIRECT 之间选择。
+ * 订阅中的前置/中转/跳板分组（按名称或 dialer-proxy 引用识别）会被改建为
+ * url-test 保留在分组末尾，由内核自动选择延迟最低的前置节点；
+ * 前置节点只作为入口，不出现在上述四个出口分组中。
  *
  * 主要功能：
  * - 不排除任何“流量、到期、公告”等伪节点；
@@ -108,6 +111,13 @@ function main(config) {
   const US_POLICY_REGEX =
     /(?:🇺🇸|美国|美國|United\s*States|America|\bUSA?\b)/i;
 
+  // 用于识别订阅中的前置/中转/跳板分组。
+  // 命中的分组不会被删除，而是改建为 url-test，由内核自动选择延迟最低的前置节点。
+  const RELAY_GROUP_REGEX = /(?:跳板|前置|中转|relay|transit)/i;
+
+  // url-test 的延迟容差（毫秒），新节点延迟优于当前节点超过该值才切换，避免抖动。
+  const RELAY_URL_TEST_TOLERANCE = 100;
+
   // GLOBAL 是 Mihomo 内置分组名，同样视为内置策略，避免被误识别或改写。
   const BUILTIN_POLICIES = new Set([
     "DIRECT",
@@ -142,6 +152,13 @@ function main(config) {
   const uniqueNodeNames = [...new Set(nodeNames)];
   const nodeNameSet = new Set(uniqueNodeNames);
   const providerNames = Object.keys(providers);
+
+  // 节点 dialer-proxy 引用的目标即前置链分组，无论其名称如何。
+  const dialerProxyRefs = new Set(
+    proxies
+      .map((proxy) => proxy && proxy["dialer-proxy"])
+      .filter((value) => typeof value === "string" && value.length > 0)
+  );
 
   // ========================
   // 三、为 provider 开启健康检查
@@ -182,6 +199,26 @@ function main(config) {
 
   const groupMap = new Map(
     originalGroups.map((group) => [group.name, group])
+  );
+
+  // 前置/中转分组：按名称正则或 dialer-proxy 引用识别，稍后改建为 url-test 保留。
+  const relayGroups = originalGroups.filter(
+    (group) =>
+      RELAY_GROUP_REGEX.test(group.name) || dialerProxyRefs.has(group.name)
+  );
+  const relayGroupNames = new Set(relayGroups.map((group) => group.name));
+
+  // 前置节点仅作为入口使用，不作为出口出现在四个固定分组中。
+  const relayNodeNames = new Set();
+  for (const group of relayGroups) {
+    const members = Array.isArray(group.proxies) ? group.proxies : [];
+    for (const member of members) {
+      if (nodeNameSet.has(member)) relayNodeNames.add(member);
+    }
+  }
+
+  const exitNodeNames = uniqueNodeNames.filter(
+    (name) => !relayNodeNames.has(name)
   );
 
   function getRuleType(rule) {
@@ -259,6 +296,9 @@ function main(config) {
     let bestScore = -1;
 
     for (const group of originalGroups) {
+      // 前置/中转分组不是机场主分组，不参与评分。
+      if (relayGroupNames.has(group.name)) continue;
+
       const reachableCount = collectReachableNodes(group.name).size;
       const providerCount = Array.isArray(group.use)
         ? group.use.length
@@ -305,6 +345,7 @@ function main(config) {
         policy === US_GROUP ||
         policy === FALLBACK_GROUP ||
         policy === OTHERS_GROUP ||
+        relayGroupNames.has(policy) ||
         nodeNameSet.has(policy)
       ) {
         continue;
@@ -325,26 +366,26 @@ function main(config) {
   // 五、创建四个策略组
   // ========================
 
-  // 1. 🚀 Proxies：全部静态节点 + 全部 provider，供手动选择。
+  // 1. 🚀 Proxies：全部出口静态节点 + 全部 provider，供手动选择。
   const nodeSelectionGroup = {
     name: NODE_GROUP,
     type: "select"
   };
 
-  if (uniqueNodeNames.length > 0) {
-    nodeSelectionGroup.proxies = uniqueNodeNames;
+  if (exitNodeNames.length > 0) {
+    nodeSelectionGroup.proxies = exitNodeNames;
   }
 
   if (providerNames.length > 0) {
     nodeSelectionGroup.use = providerNames;
   }
 
-  if (uniqueNodeNames.length === 0 && providerNames.length === 0) {
+  if (exitNodeNames.length === 0 && providerNames.length === 0) {
     nodeSelectionGroup["include-all"] = true;
   }
 
-  // 2. 🇺🇸 US：静态节点直接筛选，provider 节点通过 filter 筛选，供手动选择。
-  const staticUsNodes = uniqueNodeNames.filter((name) =>
+  // 2. 🇺🇸 US：静态出口节点直接筛选，provider 节点通过 filter 筛选，供手动选择。
+  const staticUsNodes = exitNodeNames.filter((name) =>
     US_NODE_REGEX.test(name)
   );
 
@@ -380,15 +421,15 @@ function main(config) {
     "expected-status": HEALTH_CHECK_EXPECTED_STATUS
   };
 
-  if (uniqueNodeNames.length > 0) {
-    fallbackGroup.proxies = uniqueNodeNames;
+  if (exitNodeNames.length > 0) {
+    fallbackGroup.proxies = exitNodeNames;
   }
 
   if (providerNames.length > 0) {
     fallbackGroup.use = providerNames;
   }
 
-  if (uniqueNodeNames.length === 0 && providerNames.length === 0) {
+  if (exitNodeNames.length === 0 && providerNames.length === 0) {
     fallbackGroup["include-all"] = true;
   }
 
@@ -398,8 +439,8 @@ function main(config) {
     type: "select"
   };
 
-  if (uniqueNodeNames.length > 0) {
-    othersGroup.proxies = ["DIRECT", ...uniqueNodeNames];
+  if (exitNodeNames.length > 0) {
+    othersGroup.proxies = ["DIRECT", ...exitNodeNames];
   } else {
     othersGroup.proxies = ["DIRECT"];
   }
@@ -408,16 +449,29 @@ function main(config) {
     othersGroup.use = providerNames;
   }
 
-  if (uniqueNodeNames.length === 0 && providerNames.length === 0) {
+  if (exitNodeNames.length === 0 && providerNames.length === 0) {
     othersGroup["include-all"] = true;
   }
 
-  // 强制只保留四个策略组。
+  // 前置/中转分组：改建为 url-test，内核按延迟自动选择最优前置节点，
+  // 保留是因为出口节点的 dialer-proxy 可能引用它们，删除会导致配置失效。
+  const relayUrlTestGroups = relayGroups.map((group) => ({
+    ...group,
+    type: "url-test",
+    url: HEALTH_CHECK_URL,
+    interval: HEALTH_CHECK_INTERVAL,
+    timeout: HEALTH_CHECK_TIMEOUT,
+    tolerance: RELAY_URL_TEST_TOLERANCE,
+    lazy: true
+  }));
+
+  // 强制只保留四个固定策略组，外加识别到的前置/中转分组。
   config["proxy-groups"] = [
     nodeSelectionGroup,
     usSelectionGroup,
     fallbackGroup,
-    othersGroup
+    othersGroup,
+    ...relayUrlTestGroups
   ];
 
   // ========================
@@ -438,14 +492,15 @@ function main(config) {
   }
 
   function resolveOldPolicy(policy) {
-    // 内置策略、静态真实节点和四个新策略组保持不变。
+    // 内置策略、静态真实节点、四个新策略组和前置分组保持不变。
     if (
       BUILTIN_POLICIES.has(policy) ||
       nodeNameSet.has(policy) ||
       policy === NODE_GROUP ||
       policy === US_GROUP ||
       policy === FALLBACK_GROUP ||
-      policy === OTHERS_GROUP
+      policy === OTHERS_GROUP ||
+      relayGroupNames.has(policy)
     ) {
       return policy;
     }
