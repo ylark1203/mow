@@ -5,7 +5,8 @@
  * 1. 🚀 Proxies：手动选择订阅中的全部节点；
  * 2. 🇺🇸 US：自动筛选并优选美国线路；
  * 3. 🔄 Fallback：当前线路不可用时按顺序切换；
- * 4. 🐟 Others：未命中任何规则的流量默认出口，可在全部节点和 DIRECT 之间选择。
+ * 4. 🐟 Others：未命中任何规则的流量默认出口，可选 DIRECT、🚀 Proxies
+ *    （兜底跟随节点选择）或任一单节点，兜底走向完全自主。
  * 订阅中的前置/中转/跳板分组（按名称或 dialer-proxy 引用识别）会被改建为
  * url-test 保留在分组末尾，由内核自动选择延迟最低的前置节点，并以
  * hidden 隐藏；前置节点只作为入口，不出现在上述四个出口分组中；
@@ -19,6 +20,7 @@
  * - 中国大陆 AI 产品主站强制 DIRECT；
  * - ChatGPT/OpenAI 走 🇺🇸 US；
  * - 常用测速网站走 🚀 Proxies；
+ * - 常用国外网站（Google、YouTube、X、GitHub 等）走 🚀 Proxies；
  * - 删除旧 MATCH，统一追加 MATCH,🐟 Others；
  * - 重写被删除策略组的规则引用，并兼容 SUB-RULE；
  * - 开启 unified-delay、tcp-concurrent 和策略选择持久化。
@@ -99,6 +101,55 @@ function main(config) {
 
     // 360 AI（只匹配 AI 子域名，不直连整个 360.com）
     "ai.360.com"
+  ];
+
+  // 常用国外网站的主站域名，统一走 🚀 Proxies，便于集中管理主力出口。
+  // 未列出的国外网站仍会落到末尾的 MATCH 兜底规则，由 🐟 Others 接管。
+  const FOREIGN_COMMON_DOMAINS = [
+    // Google 系
+    "google.com",
+    "googleapis.com",
+    "gstatic.com",
+    "googleusercontent.com",
+    "googlevideo.com",
+    "youtube.com",
+    "ytimg.com",
+    "ggpht.com",
+
+    // 社交 / 通讯
+    "x.com",
+    "twitter.com",
+    "twimg.com",
+    "facebook.com",
+    "fbcdn.net",
+    "instagram.com",
+    "cdninstagram.com",
+    "threads.net",
+    "whatsapp.com",
+    "telegram.org",
+    "t.me",
+    "discord.com",
+    "discord.gg",
+    "discordapp.com",
+    "reddit.com",
+    "tiktok.com",
+
+    // 开发者常用
+    "github.com",
+    "githubusercontent.com",
+    "githubassets.com",
+    "stackoverflow.com",
+
+    // 流媒体
+    "netflix.com",
+    "nflxvideo.net",
+    "spotify.com",
+
+    // 其他常用
+    "wikipedia.org",
+    "wikimedia.org",
+    "medium.com",
+    "notion.so"
   ];
 
   // 用于识别美国节点名称。
@@ -481,16 +532,18 @@ function main(config) {
     fallbackGroup["include-all"] = true;
   }
 
-  // 4. 🐟 Others：未命中任何规则的兜底出口，DIRECT 置首，可在全部节点和 DIRECT 之间选择。
+  // 4. 🐟 Others：未命中任何规则的兜底出口。
+  // DIRECT 置首，其次是 🚀 Proxies（选中它即等于兜底流量跟随节点选择），
+  // 之后是全部出口节点，可完全自主决定兜底走向。
   const othersGroup = {
     name: OTHERS_GROUP,
     type: "select"
   };
 
   if (exitNodeNames.length > 0) {
-    othersGroup.proxies = ["DIRECT", ...exitNodeNames];
+    othersGroup.proxies = ["DIRECT", NODE_GROUP, ...exitNodeNames];
   } else {
-    othersGroup.proxies = ["DIRECT"];
+    othersGroup.proxies = ["DIRECT", NODE_GROUP];
   }
 
   if (providerNames.length > 0) {
@@ -676,6 +729,11 @@ function main(config) {
     `DOMAIN-SUFFIX,ippure.com,${NODE_GROUP}`
   ];
 
+  // 常用国外网站走 🚀 Proxies，主力出口集中在节点选择中管理。
+  const foreignCommonRules = FOREIGN_COMMON_DOMAINS.map(
+    (domain) => `DOMAIN-SUFFIX,${domain},${NODE_GROUP}`
+  );
+
   // 根据“规则类型 + 匹配对象”去重，移除订阅中的旧冲突规则。
   function getRuleMatchKey(rule) {
     if (typeof rule !== "string") return null;
@@ -690,7 +748,8 @@ function main(config) {
     ...cnAiDirectRules,
     ...chatgptRules,
     ...speedTestRules,
-    ...ipCheckRules
+    ...ipCheckRules,
+    ...foreignCommonRules
   ];
 
   const forcedRuleKeys = new Set(
@@ -708,6 +767,7 @@ function main(config) {
     ...chatgptRules,
     ...speedTestRules,
     ...ipCheckRules,
+    ...foreignCommonRules,
     ...rewrittenRules,
     `MATCH,${OTHERS_GROUP}`
   ];
