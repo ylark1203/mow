@@ -21,6 +21,8 @@
  * - ChatGPT/OpenAI 走 🇺🇸 US；
  * - 常用测速网站走 🚀 Proxies；
  * - 常用国外网站（Google、YouTube、X、GitHub 等）走 🚀 Proxies；
+ * - 注入 GFW 规则集（MetaCubeX meta-rules-dat，活跃维护），被墙网站统一走 🚀 Proxies，
+ *   位置在订阅直连规则之后、MATCH 之前；
  * - 删除旧 MATCH，统一追加 MATCH,🐟 Others；
  * - 重写被删除策略组的规则引用，并兼容 SUB-RULE；
  * - 开启 unified-delay、tcp-concurrent 和策略选择持久化。
@@ -734,6 +736,12 @@ function main(config) {
     (domain) => `DOMAIN-SUFFIX,${domain},${NODE_GROUP}`
   );
 
+  // 基于 MetaCubeX meta-rules-dat（活跃维护）的 GFW 规则集，统一走 🚀 Proxies。
+  // 位置在订阅规则之后、MATCH 之前：订阅的国内直连规则优先命中，
+  // 被墙网站走节点选择，仍未命中的流量由 🐟 Others 兜底。
+  const GFW_RULE_PROVIDER_NAME = "gfw";
+  const gfwProxyRule = `RULE-SET,${GFW_RULE_PROVIDER_NAME},${NODE_GROUP}`;
+
   // 根据“规则类型 + 匹配对象”去重，移除订阅中的旧冲突规则。
   function getRuleMatchKey(rule) {
     if (typeof rule !== "string") return null;
@@ -749,7 +757,8 @@ function main(config) {
     ...chatgptRules,
     ...speedTestRules,
     ...ipCheckRules,
-    ...foreignCommonRules
+    ...foreignCommonRules,
+    gfwProxyRule
   ];
 
   const forcedRuleKeys = new Set(
@@ -769,8 +778,23 @@ function main(config) {
     ...ipCheckRules,
     ...foreignCommonRules,
     ...rewrittenRules,
+    gfwProxyRule,
     `MATCH,${OTHERS_GROUP}`
   ];
+
+  // 注入 GFW 规则集（MetaCubeX meta-rules-dat，与订阅自带 rule-providers 同源）。
+  // 键名固定，重复执行覆写时覆盖同键，保持幂等。
+  config["rule-providers"] = {
+    ...(config["rule-providers"] || {}),
+    [GFW_RULE_PROVIDER_NAME]: {
+      type: "http",
+      behavior: "domain",
+      format: "mrs",
+      interval: 86400,
+      path: `./ruleset/${GFW_RULE_PROVIDER_NAME}.mrs`,
+      url: "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geosite/gfw.mrs"
+    }
+  };
 
   // ========================
   // 七、通用性能与持久化优化
