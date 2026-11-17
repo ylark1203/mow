@@ -18,7 +18,6 @@
  * - 为 proxy-provider 强制开启健康检查；
  * - 🇺🇸 US 使用 select，在筛选出的美国线路中手动选择；
  * - 中国大陆 AI 产品主站强制 DIRECT；
- * - 红果短剧正片直连，穿山甲广告 SDK 域名整域 REJECT（跳过开屏/插播广告）；
  * - ChatGPT/OpenAI 走 🇺🇸 US；
  * - 常用测速网站走 🚀 Proxies；
  * - 常用国外网站（Google、YouTube、X、GitHub 等）走 🚀 Proxies；
@@ -153,44 +152,6 @@ function main(config) {
     "wikimedia.org",
     "medium.com",
     "notion.so"
-  ];
-
-  // 红果短剧（字节系）广告拦截规则，整域 REJECT 实现跳过开屏与插播广告。
-  // 正片与广告分属不同域名（正片走 byteimg/douyinvod/snssdk 主域，保持直连），
-  // 只拦截穿山甲广告 SDK 与广告素材域名，不影响播放。
-  // 域名清单参考社区验证的 hongguo-lite 模块（基础版，mihomo 无法 MITM，
-  // *.snssdk.com/api/ad/ 路径级拦截不在此列）。
-  const HONGGUO_AD_BLOCK_RULES = [
-    // 穿山甲 Pangle SDK（关键词覆盖 pangolin-sdk-toutiao 全家及 api-access/log-api 子域）
-    "DOMAIN-KEYWORD,pangolin,REJECT",
-    "DOMAIN-SUFFIX,pglstatp-toutiao.com,REJECT",
-    "DOMAIN-SUFFIX,pglstatp-toutiao-b.com,REJECT",
-
-    // 广告素材签名域（覆盖 p3/p6/p9-ad-sign.byteimg.com）
-    "DOMAIN-KEYWORD,-ad-sign.byteimg.com,REJECT",
-
-    // 广告落地页跳转
-    "DOMAIN-SUFFIX,zlink.ugsdk.cn,REJECT",
-
-    // 字节广告 API 子域（只拦 ads 前缀，不碰 zijieapi 主域）
-    "DOMAIN-REGEX,^ads\\d+-normal\\.zijieapi\\.com$,REJECT"
-  ];
-
-  // 可选：红果/番茄系埋点上报域名。默认关闭（false）——
-  // 开启可能影响“看广告得金币 / 签到”等奖励入口，出现异常请改回 false。
-  const BLOCK_HONGGUO_TRACKING = false;
-  const HONGGUO_TRACKING_DOMAINS = [
-    "mon.toutiaocloud.net",
-    "mon.toutiaocloud.com",
-    "i.snssdk.com",
-    "i-lq.snssdk.com",
-    "is.snssdk.com",
-    "is-lq.snssdk.com",
-    "log3-applog.fqnovel.com",
-    "log5-applog.fqnovel.com",
-    "mon-misc.fqnovel.com",
-    "mon3-misc.fqnovel.com",
-    "mon5-misc.fqnovel.com"
   ];
 
   // 用于识别美国节点名称。
@@ -775,15 +736,6 @@ function main(config) {
     (domain) => `DOMAIN-SUFFIX,${domain},${NODE_GROUP}`
   );
 
-  // 红果短剧：正片保持直连（字节系域名由订阅国内规则直连），广告域名 REJECT。
-  // 必须排在订阅的宽泛直连规则之前，否则广告域名会被抢先放行。
-  const hongguoAdBlockRules = [...HONGGUO_AD_BLOCK_RULES];
-  if (BLOCK_HONGGUO_TRACKING) {
-    for (const domain of HONGGUO_TRACKING_DOMAINS) {
-      hongguoAdBlockRules.push(`DOMAIN-SUFFIX,${domain},REJECT`);
-    }
-  }
-
   // 基于 MetaCubeX meta-rules-dat（活跃维护）的 GFW 规则集，统一走 🚀 Proxies。
   // 位置在订阅规则之后、MATCH 之前：订阅的国内直连规则优先命中，
   // 被墙网站走节点选择，仍未命中的流量由 🐟 Others 兜底。
@@ -806,7 +758,6 @@ function main(config) {
     ...speedTestRules,
     ...ipCheckRules,
     ...foreignCommonRules,
-    ...hongguoAdBlockRules,
     gfwProxyRule
   ];
 
@@ -822,7 +773,6 @@ function main(config) {
   // 规则只在这里统一写入一次，避免后续赋值覆盖前面的专用规则。
   config.rules = [
     ...cnAiDirectRules,
-    ...hongguoAdBlockRules,
     ...chatgptRules,
     ...speedTestRules,
     ...ipCheckRules,
