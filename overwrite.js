@@ -796,6 +796,15 @@ function main(config) {
     }
   };
 
+  // 所有 http 类型 rule-providers 改为经 🚀 Proxies 下载：
+  // jsdelivr 在国内直连不稳定（TLS 握手超时），走代理可绕开封锁。
+  for (const provider of Object.values(config["rule-providers"])) {
+    if (!provider || typeof provider !== "object") continue;
+    if (provider.type !== "http") continue;
+
+    provider.proxy = NODE_GROUP;
+  }
+
   // ========================
   // 七、通用性能与持久化优化
   // ========================

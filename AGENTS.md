@@ -14,7 +14,7 @@
 - 为所有 proxy-provider 强制开启健康检查。
 - 重写路由规则中引用已删除策略组的策略名（兼容 `SUB-RULE` 与 `no-resolve` 后缀），删除旧 `MATCH` 规则并在末尾统一追加 `MATCH,🐟 Others`。
 - 在中国大陆 AI 产品主站（DeepSeek、Kimi、豆包等）置顶 DIRECT 分流规则；ChatGPT/OpenAI 域名走 `🇺🇸 US`；常用测速网站与常用国外网站（`FOREIGN_COMMON_DOMAINS`：Google、YouTube、X、GitHub 等）走 `🚀 Proxies`。
-- 注入 GFW 规则集（rule-provider `gfw`，引用活跃维护的 MetaCubeX meta-rules-dat `geosite/gfw.mrs`，`RULE-SET` 规则位于订阅规则之后、`MATCH` 之前），被墙网站统一走 `🚀 Proxies`；覆写保留订阅自带的 rule-providers，注入键固定以保证幂等。
+- 注入 GFW 规则集（rule-provider `gfw`，引用活跃维护的 MetaCubeX meta-rules-dat `geosite/gfw.mrs`，`RULE-SET` 规则位于订阅规则之后、`MATCH` 之前），被墙网站统一走 `🚀 Proxies`；覆写保留订阅自带的 rule-providers，注入键固定以保证幂等。所有 http 类型 rule-providers 统一加 `proxy: 🚀 Proxies` 经代理下载，绕过 jsdelivr 国内直连的 TLS 超时问题。
 - 开启 `unified-delay`、`tcp-concurrent` 和策略选择持久化（`profile.store-selected` / `store-fake-ip`）。
 
 ## 技术栈与运行时
