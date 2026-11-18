@@ -228,14 +228,27 @@ function main(config) {
   for (const provider of Object.values(providers)) {
     if (!provider || typeof provider !== "object") continue;
 
+    const healthCheck = provider["health-check"] || {};
     provider["health-check"] = {
-      ...(provider["health-check"] || {}),
+      ...healthCheck,
       enable: true,
-      url: HEALTH_CHECK_URL,
-      interval: HEALTH_CHECK_INTERVAL,
-      timeout: HEALTH_CHECK_TIMEOUT,
-      lazy: true,
-      "expected-status": HEALTH_CHECK_EXPECTED_STATUS
+      url:
+        healthCheck.url !== undefined
+          ? healthCheck.url
+          : HEALTH_CHECK_URL,
+      interval:
+        healthCheck.interval !== undefined
+          ? healthCheck.interval
+          : HEALTH_CHECK_INTERVAL,
+      timeout:
+        healthCheck.timeout !== undefined
+          ? healthCheck.timeout
+          : HEALTH_CHECK_TIMEOUT,
+      lazy: healthCheck.lazy !== undefined ? healthCheck.lazy : true,
+      "expected-status":
+        healthCheck["expected-status"] !== undefined
+          ? healthCheck["expected-status"]
+          : HEALTH_CHECK_EXPECTED_STATUS
     };
   }
 
@@ -270,13 +283,32 @@ function main(config) {
   const relayGroupNames = new Set(relayGroups.map((group) => group.name));
 
   // 前置节点仅作为入口使用，不作为出口出现在四个固定分组中。
+  // 递归遍历嵌套策略组，避免入口节点经辅助组引用后又混入出口组。
   const relayNodeNames = new Set();
-  for (const group of relayGroups) {
+  function collectRelayNodes(groupName, visiting = new Set()) {
+    if (visiting.has(groupName)) return;
+
+    const group = groupMap.get(groupName);
+    if (!group) return;
+
+    const nextVisiting = new Set(visiting);
+    nextVisiting.add(groupName);
+
     const members = Array.isArray(group.proxies) ? group.proxies : [];
     for (const member of members) {
-      if (nodeNameSet.has(member)) relayNodeNames.add(member);
+      if (nodeNameSet.has(member)) {
+        relayNodeNames.add(member);
+      } else if (groupMap.has(member)) {
+        collectRelayNodes(member, nextVisiting);
+      }
+    }
+
+    if (group["include-all"] || group["include-all-proxies"]) {
+      for (const nodeName of uniqueNodeNames) relayNodeNames.add(nodeName);
     }
   }
+
+  for (const group of relayGroups) collectRelayNodes(group.name);
 
   const exitNodeNames = uniqueNodeNames.filter(
     (name) => !relayNodeNames.has(name)
