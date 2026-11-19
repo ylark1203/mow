@@ -141,6 +141,8 @@ function main(config) {
     "githubusercontent.com",
     "githubassets.com",
     "stackoverflow.com",
+    "code.visualstudio.com",
+    "vscode.download.prss.microsoft.com",
 
     // 流媒体
     "netflix.com",
