@@ -2,27 +2,28 @@
  * Clash Verge Rev / Mihomo Party 通用脚本覆写（稳定性与速度优化版）
  *
  * 最终仅保留四个策略组：
- * 1. 🚀 Proxies：手动选择订阅中的全部节点；
- * 2. 🇺🇸 US：自动筛选并优选美国线路；
+ * 1. 🚀 Proxies：手动选择订阅中的全部节点；首位是 🔄 Fallback，
+ *    因此新装配置默认就走自动故障转移，选中具体节点即回到手动模式；
+ * 2. 🇺🇸 US：自动筛选并优选美国线路（独立出口，不设兜底成员）；
  * 3. 🔄 Fallback：当前线路不可用时按顺序切换；
  * 4. 🐟 Others：未命中任何规则的流量默认出口，可选 DIRECT、🚀 Proxies
- *    （兜底跟随节点选择）或任一单节点，兜底走向完全自主。
- * 订阅中的前置/中转/跳板分组（按名称或 dialer-proxy 引用识别）会被改建为
- * url-test 保留在分组末尾，由内核自动选择延迟最低的前置节点，并以
- * hidden 隐藏；前置节点只作为入口，不出现在上述四个出口分组中；
- * 仅包装内置策略的分组（如“拦截”“关闭”）会被删除，引用它的规则
- * 直接改写为对应内置策略。
+ *    （兜底跟随节点选择）、🔄 Fallback 或任一单节点，兜底走向完全自主。
+ * 订阅中的前置/中转/跳板分组（按 dialer-proxy 引用或名称识别）会被改建为
+ * url-test 保留，由内核自动选择延迟最低的前置节点；前置节点只作为入口，
+ * 不出现在上述四个出口分组中；仅包装内置策略的分组（如“拦截”“关闭”）
+ * 会被删除，引用它的规则直接改写为对应内置策略。
  *
  * 主要功能：
  * - 不排除任何“流量、到期、公告”等伪节点；
- * - 为 proxy-provider 强制开启健康检查；
+ * - 同名节点去重（内核遇到重名节点会判定整份配置非法）；
+ * - 为 proxy-provider 强制开启健康检查，并兼容订阅的驼峰 healthCheck 写法；
  * - 🇺🇸 US 使用 select，在筛选出的美国线路中手动选择；
  * - 中国大陆 AI 产品主站强制 DIRECT；
  * - ChatGPT/OpenAI 走 🇺🇸 US；
  * - 常用测速网站走 🚀 Proxies；
  * - 常用国外网站（Google、YouTube、X、GitHub 等）走 🚀 Proxies；
  * - 注入 GFW 规则集（MetaCubeX meta-rules-dat，活跃维护），被墙网站统一走 🚀 Proxies，
- *   位置在订阅直连规则之后、MATCH 之前；
+ *   位置在订阅的「中国大陆直连」判断之前、MATCH 之前；
  * - 删除旧 MATCH，统一追加 MATCH,🐟 Others；
  * - 重写被删除策略组的规则引用，并兼容 SUB-RULE；
  * - 开启 unified-delay、tcp-concurrent 和策略选择持久化。
@@ -54,6 +55,13 @@ function main(config) {
   const HEALTH_CHECK_TIMEOUT = 5000; // 毫秒
   const HEALTH_CHECK_EXPECTED_STATUS = 204;
   const HEALTH_CHECK_MAX_FAILED_TIMES = 2;
+
+  // proxy-provider 的健康检查是否使用 lazy（不使用时不计时测速）。
+  // 保持 true 可以避免大订阅（上千节点）持续测速占用 CPU；
+  // 代价是未测速的节点在 🔄 Fallback 中会被默认视为可用，
+  // 需要等当前节点连续失败（max-failed-times）后才会被动切换。
+  // 追求「开箱即用秒级切换」且节点数不多时，可改为 false。
+  const PROVIDER_HEALTH_CHECK_LAZY = true;
 
   // 中国大陆 AI 产品的主站域名。
   // 仅列出产品专用域名，避免使用 baidu.com、qq.com、aliyun.com 等过宽规则。
@@ -169,7 +177,8 @@ function main(config) {
     /(?:🇺🇸|美国|美國|United\s*States|America|\bUSA?\b)/i;
 
   // 用于识别订阅中的前置/中转/跳板分组。
-  // 命中的分组不会被删除，而是改建为 url-test，由内核自动选择延迟最低的前置节点。
+  // 名称命中只是弱证据：还会要求该分组没有被任何规则引用，
+  // 否则机场把总策略组命名为“中转专线”时，全部节点会被误判为入口节点。
   const RELAY_GROUP_REGEX = /(?:跳板|前置|中转|relay|transit)/i;
 
   // 前置/中转分组的默认测速地址。
@@ -178,8 +187,30 @@ function main(config) {
   const RELAY_HEALTH_CHECK_URL =
     "http://connectivitycheck.platform.hicloud.com/generate_204";
 
-  // url-test 的延迟容差（毫秒），新节点延迟优于当前节点超过该值才切换，避免抖动。
+  // 前置/中转分组的测速间隔。入口节点数量少，切换代价高，
+  // 用比出口节点（300 秒）更短的间隔，尽快发现入口不可用；
+  // 订阅自带 interval 时优先沿用。
+  const RELAY_HEALTH_CHECK_INTERVAL = 60;
+
+  // url-test 的延迟容差（毫秒），新节点延迟优于当前节点超过该值才切换。
+  // 中转入口频繁切换会打断已有连接，因此保留较大容差以避免抖动。
   const RELAY_URL_TEST_TOLERANCE = 100;
+
+  // 前置/中转分组是否在客户端中隐藏。
+  // 默认可见：入口全挂时出口节点仍会显示“可用”，只有入口分组才能反映真实链路状态。
+  const RELAY_GROUP_HIDDEN = false;
+
+  // 需要经代理下载的规则集站点：github / jsdelivr 在国内直连会 TLS 超时。
+  // 只有命中这些域名的 http 类 rule-provider 才会被强制走 🚀 Proxies，
+  // 国内镜像规则集保持直连，避免代理不可用时国内规则也一起加载失败。
+  const RULE_PROVIDER_PROXY_HOSTS = [
+    "github.com",
+    "githubusercontent.com",
+    "githubassets.com",
+    "jsdelivr.net",
+    "unpkg.com",
+    "raw.gitmirror.com"
+  ];
 
   // GLOBAL 是 Mihomo 内置分组名，同样视为内置策略，避免被误识别或改写。
   const BUILTIN_POLICIES = new Set([
@@ -207,21 +238,76 @@ function main(config) {
       ? config["proxy-providers"]
       : {};
 
-  const nodeNames = proxies
+  // 同名节点在内核里是致命错误（proxy xxx is the duplicate name），
+  // 整份配置会直接加载失败，这里按名称保留第一个，并写回 config.proxies。
+  const seenNodeNames = new Set();
+  const uniqueProxies = proxies.filter((proxy) => {
+    const name = proxy && typeof proxy.name === "string" ? proxy.name : "";
+    // 无名称的项不在本脚本职责内，原样保留交由内核报错。
+    if (!name) return true;
+    if (seenNodeNames.has(name)) return false;
+    seenNodeNames.add(name);
+    return true;
+  });
+
+  if (Array.isArray(config.proxies)) config.proxies = uniqueProxies;
+
+  // 按名称去重，但不排除任何节点，包括伪节点。
+  const uniqueNodeNames = uniqueProxies
     .map((proxy) => proxy && proxy.name)
     .filter((name) => typeof name === "string" && name.length > 0);
 
-  // 按名称去重，但不排除任何节点，包括伪节点。
-  const uniqueNodeNames = [...new Set(nodeNames)];
   const nodeNameSet = new Set(uniqueNodeNames);
   const providerNames = Object.keys(providers);
 
   // 节点 dialer-proxy 引用的目标即前置链分组，无论其名称如何。
   const dialerProxyRefs = new Set(
-    proxies
+    uniqueProxies
       .map((proxy) => proxy && proxy["dialer-proxy"])
       .filter((value) => typeof value === "string" && value.length > 0)
   );
+
+  // ---- 规则读取辅助（第六章重写规则时复用）----
+
+  function getRuleType(rule) {
+    if (typeof rule !== "string") return "";
+    const index = rule.indexOf(",");
+    const value = index >= 0 ? rule.slice(0, index) : rule;
+    return value.trim().toUpperCase();
+  }
+
+  function stripNoResolve(rule) {
+    let value = rule.trim();
+    let suffix = "";
+    const noResolveRegex = /,\s*no-resolve\s*$/i;
+
+    if (noResolveRegex.test(value)) {
+      value = value.replace(noResolveRegex, "");
+      suffix = ",no-resolve";
+    }
+
+    return { value, suffix };
+  }
+
+  // 从普通路由规则最右侧读取策略名；SUB-RULE 的语法是
+  // SUB-RULE,<匹配条件>,<子规则名>，最后一项不是策略，不读取。
+  function extractPolicy(rule) {
+    if (typeof rule !== "string") return null;
+    if (getRuleType(rule) === "SUB-RULE") return null;
+
+    const { value } = stripNoResolve(rule);
+    const index = value.lastIndexOf(",");
+    return index >= 0 ? value.slice(index + 1).trim() : null;
+  }
+
+  // 统计每条策略被规则引用的次数：识别机场总策略组、判断是否前置分组都要用。
+  const policyUsage = new Map();
+
+  for (const rule of rules) {
+    const policy = extractPolicy(rule);
+    if (!policy) continue;
+    policyUsage.set(policy, (policyUsage.get(policy) || 0) + 1);
+  }
 
   // ========================
   // 三、为 provider 开启健康检查
@@ -230,26 +316,36 @@ function main(config) {
   for (const provider of Object.values(providers)) {
     if (!provider || typeof provider !== "object") continue;
 
-    const healthCheck = provider["health-check"] || {};
+    // 订阅可能使用驼峰 healthCheck，而内核只认中划线 health-check。
+    // 两者并存时内核会忽略 healthCheck，导致订阅自带的测速地址
+    // （例如中转入口使用的国内地址）被静默丢弃，入口节点因此被全部误判失败。
+    const existing =
+      provider["health-check"] && typeof provider["health-check"] === "object"
+        ? provider["health-check"]
+        : provider.healthCheck && typeof provider.healthCheck === "object"
+          ? provider.healthCheck
+          : {};
+
+    // 统一收敛到中划线写法，并清掉驼峰键，避免两份配置长期不一致。
+    delete provider.healthCheck;
+
     provider["health-check"] = {
-      ...healthCheck,
+      ...existing,
       enable: true,
-      url:
-        healthCheck.url !== undefined
-          ? healthCheck.url
-          : HEALTH_CHECK_URL,
+      url: existing.url !== undefined ? existing.url : HEALTH_CHECK_URL,
       interval:
-        healthCheck.interval !== undefined
-          ? healthCheck.interval
+        existing.interval !== undefined
+          ? existing.interval
           : HEALTH_CHECK_INTERVAL,
       timeout:
-        healthCheck.timeout !== undefined
-          ? healthCheck.timeout
+        existing.timeout !== undefined
+          ? existing.timeout
           : HEALTH_CHECK_TIMEOUT,
-      lazy: healthCheck.lazy !== undefined ? healthCheck.lazy : true,
+      lazy:
+        existing.lazy !== undefined ? existing.lazy : PROVIDER_HEALTH_CHECK_LAZY,
       "expected-status":
-        healthCheck["expected-status"] !== undefined
-          ? healthCheck["expected-status"]
+        existing["expected-status"] !== undefined
+          ? existing["expected-status"]
           : HEALTH_CHECK_EXPECTED_STATUS
     };
   }
@@ -278,10 +374,13 @@ function main(config) {
   );
 
   // 前置/中转分组：按名称正则或 dialer-proxy 引用识别，稍后改建为 url-test 保留。
-  const relayGroups = originalGroups.filter(
-    (group) =>
-      RELAY_GROUP_REGEX.test(group.name) || dialerProxyRefs.has(group.name)
-  );
+  // 名称命中但被规则大量引用的组是出口分组（机场常把总组命名为“中转专线”），
+  // 若当作前置组处理，其全部节点会被移出出口分组，出口列表因此被入口节点污染。
+  const relayGroups = originalGroups.filter((group) => {
+    if (dialerProxyRefs.has(group.name)) return true;
+    if (!RELAY_GROUP_REGEX.test(group.name)) return false;
+    return (policyUsage.get(group.name) || 0) === 0;
+  });
   const relayGroupNames = new Set(relayGroups.map((group) => group.name));
 
   // 前置节点仅作为入口使用，不作为出口出现在四个固定分组中。
@@ -325,6 +424,15 @@ function main(config) {
     const group = groupMap.get(groupName);
     if (!group) return null;
 
+    // 带 include-all 的分组实际会包含全部节点，不能当作纯内置策略包装组删除。
+    if (
+      group["include-all"] ||
+      group["include-all-proxies"] ||
+      group["include-all-providers"]
+    ) {
+      return null;
+    }
+
     const members = Array.isArray(group.proxies) ? group.proxies : [];
     if (members.length === 0) return null;
 
@@ -353,44 +461,6 @@ function main(config) {
   for (const group of originalGroups) {
     const target = resolveBuiltinOnly(group.name);
     if (target) builtinWrapperByName.set(group.name, target);
-  }
-
-  function getRuleType(rule) {
-    if (typeof rule !== "string") return "";
-    const index = rule.indexOf(",");
-    const value = index >= 0 ? rule.slice(0, index) : rule;
-    return value.trim().toUpperCase();
-  }
-
-  function stripNoResolve(rule) {
-    let value = rule.trim();
-    let suffix = "";
-    const noResolveRegex = /,\s*no-resolve\s*$/i;
-
-    if (noResolveRegex.test(value)) {
-      value = value.replace(noResolveRegex, "");
-      suffix = ",no-resolve";
-    }
-
-    return { value, suffix };
-  }
-
-  // 从普通路由规则最右侧读取策略名；SUB-RULE 最后一项是子规则名，不读取。
-  function extractPolicy(rule) {
-    if (typeof rule !== "string") return null;
-    if (getRuleType(rule) === "SUB-RULE") return null;
-
-    const { value } = stripNoResolve(rule);
-    const index = value.lastIndexOf(",");
-    return index >= 0 ? value.slice(index + 1).trim() : null;
-  }
-
-  const policyUsage = new Map();
-
-  for (const rule of rules) {
-    const policy = extractPolicy(rule);
-    if (!policy) continue;
-    policyUsage.set(policy, (policyUsage.get(policy) || 0) + 1);
   }
 
   // 递归统计原策略组最终可访问的静态真实节点。
@@ -454,11 +524,13 @@ function main(config) {
         continue;
       }
 
+      // 评分依据（由强到弱）：被规则引用次数 > include-all > 接入 provider 数 > 静态可达节点数。
+      // 旧实现以可达节点数为主，纯 provider 的机场主组会被任意含静态节点的辅助组击败。
       const score =
-        reachableCount * 1000000 +
-        providerCount * 100000 +
-        (includeAll ? 10000000 : 0) +
-        usageCount;
+        usageCount * 1000000000 +
+        (includeAll ? 100000000 : 0) +
+        providerCount * 1000000 +
+        reachableCount;
 
       if (score > bestScore) {
         bestScore = score;
@@ -501,46 +573,65 @@ function main(config) {
   // 五、创建四个策略组
   // ========================
 
-  // 1. 🚀 Proxies：全部出口静态节点 + 全部 provider，供手动选择。
+  // 前置分组引用的 provider 只提供入口节点，不作为出口引入四个固定分组：
+  // 否则入口节点会出现在出口列表里，选中即断链（没有链式代理，直连入口）。
+  const relayProviderNames = new Set();
+  for (const group of relayGroups) {
+    const useList = Array.isArray(group.use) ? group.use : [];
+    for (const providerName of useList) relayProviderNames.add(providerName);
+  }
+  const exitProviderNames = providerNames.filter(
+    (name) => !relayProviderNames.has(name)
+  );
+  const hasExitProviders = exitProviderNames.length > 0;
+
+  // 完全没有可识别出口时的兜底标记：交给内核 include-all。
+  const noKnownExit = exitNodeNames.length === 0 && !hasExitProviders;
+
+  // 1. 🚀 Proxies：全部出口静态节点 + 全部出口 provider，供手动选择。
+  // 首位放 🔄 Fallback：新装配置默认即自动故障转移；
+  // 用户选中任一具体节点则回到手动模式（store-selected 会记住选择）。
   const nodeSelectionGroup = {
     name: NODE_GROUP,
-    type: "select"
+    type: "select",
+    proxies: [FALLBACK_GROUP, ...exitNodeNames]
   };
 
-  if (exitNodeNames.length > 0) {
-    nodeSelectionGroup.proxies = exitNodeNames;
+  if (hasExitProviders) {
+    nodeSelectionGroup.use = exitProviderNames;
   }
 
-  if (providerNames.length > 0) {
-    nodeSelectionGroup.use = providerNames;
-  }
-
-  if (exitNodeNames.length === 0 && providerNames.length === 0) {
+  if (noKnownExit) {
     nodeSelectionGroup["include-all"] = true;
   }
 
   // 2. 🇺🇸 US：静态出口节点直接筛选，provider 节点通过 filter 筛选，供手动选择。
+  // 该组是 AI 流量的独立出口，刻意不加入兜底成员：
+  // 筛选不到美国节点时应表现为“无可用出口”，而不是静默回落到其它线路。
   const staticUsNodes = exitNodeNames.filter((name) =>
     US_NODE_REGEX.test(name)
   );
 
   const usSelectionGroup = {
     name: US_GROUP,
-    type: "select"
+    type: "select",
+    url: HEALTH_CHECK_URL,
+    interval: HEALTH_CHECK_INTERVAL,
+    timeout: HEALTH_CHECK_TIMEOUT,
+    "expected-status": HEALTH_CHECK_EXPECTED_STATUS
   };
 
   if (staticUsNodes.length > 0) {
     usSelectionGroup.proxies = staticUsNodes;
   }
 
-  if (providerNames.length > 0) {
-    usSelectionGroup.use = providerNames;
+  if (hasExitProviders) {
+    usSelectionGroup.use = exitProviderNames;
     usSelectionGroup.filter = US_PROVIDER_FILTER;
   }
 
-  // 完全没有静态节点和 provider 时，生成一个明确拒绝连接的非空组。
-  if (staticUsNodes.length === 0 && providerNames.length === 0) {
-    usSelectionGroup.type = "select";
+  // 完全没有静态节点和出口 provider 时，生成一个明确拒绝连接的非空组。
+  if (staticUsNodes.length === 0 && !hasExitProviders) {
     usSelectionGroup.proxies = ["REJECT"];
   }
 
@@ -560,75 +651,177 @@ function main(config) {
     fallbackGroup.proxies = exitNodeNames;
   }
 
-  if (providerNames.length > 0) {
-    fallbackGroup.use = providerNames;
+  if (hasExitProviders) {
+    fallbackGroup.use = exitProviderNames;
   }
 
-  if (exitNodeNames.length === 0 && providerNames.length === 0) {
+  if (noKnownExit) {
     fallbackGroup["include-all"] = true;
   }
 
   // 4. 🐟 Others：未命中任何规则的兜底出口。
   // DIRECT 置首，其次是 🚀 Proxies（选中它即等于兜底流量跟随节点选择），
-  // 之后是全部出口节点，可完全自主决定兜底走向。
+  // 接着是 🔄 Fallback（兜底流量也能自动故障转移），之后是全部出口节点。
   const othersGroup = {
     name: OTHERS_GROUP,
-    type: "select"
+    type: "select",
+    url: HEALTH_CHECK_URL,
+    interval: HEALTH_CHECK_INTERVAL,
+    timeout: HEALTH_CHECK_TIMEOUT,
+    "expected-status": HEALTH_CHECK_EXPECTED_STATUS,
+    proxies: ["DIRECT", NODE_GROUP, FALLBACK_GROUP, ...exitNodeNames]
   };
 
-  if (exitNodeNames.length > 0) {
-    othersGroup.proxies = ["DIRECT", NODE_GROUP, ...exitNodeNames];
-  } else {
-    othersGroup.proxies = ["DIRECT", NODE_GROUP];
+  if (hasExitProviders) {
+    othersGroup.use = exitProviderNames;
   }
 
-  if (providerNames.length > 0) {
-    othersGroup.use = providerNames;
-  }
-
-  if (exitNodeNames.length === 0 && providerNames.length === 0) {
+  if (noKnownExit) {
     othersGroup["include-all"] = true;
   }
 
   // 前置/中转分组：改建为 url-test，内核按延迟自动选择最优前置节点，
   // 保留是因为出口节点的 dialer-proxy 可能引用它们，删除会导致配置失效。
-  // 测速地址沿用原分组或默认国内可达地址；成员中纯内置策略及其包装组
-  // （如“关闭”→DIRECT）在 url-test 下测速无意义且会因延迟最低而永远胜出，予以剔除；
-  // hidden 让其在客户端中不显示。
-  const relayUrlTestGroups = relayGroups.map((group) => {
-    const members = (Array.isArray(group.proxies) ? group.proxies : []).filter(
+  // 测速地址沿用原分组或默认国内可达地址。
+  function sanitizeMembers(members) {
+    if (!Array.isArray(members)) return [];
+
+    // 只保留仍存在的节点和其他分组，并剔除内置策略及其包装组（如“关闭”→DIRECT）：
+    // 它们在 url-test 里测速无意义且延迟最低，会永远胜出。
+    return members.filter(
       (member) =>
-        !BUILTIN_POLICIES.has(member) && !builtinWrapperByName.has(member)
+        typeof member === "string" &&
+        !BUILTIN_POLICIES.has(member) &&
+        !builtinWrapperByName.has(member) &&
+        (nodeNameSet.has(member) || groupMap.has(member))
+    );
+  }
+
+  // 关键：成员为空时绝不能补 DIRECT。DIRECT 延迟最低，url-test 会永远选中它，
+  // 依赖该分组的 dialer-proxy 链会被静默降级为「直连」——只允许入口访问的
+  // 出口节点会全部超时，或者本机 IP 被直接暴露给出口。
+  const relayUrlTestGroups = relayGroups.map((group) => {
+    const members = sanitizeMembers(group.proxies);
+    const useProviders = (Array.isArray(group.use) ? group.use : []).filter(
+      (providerName) => providerNames.includes(providerName)
+    );
+    const includeAll = Boolean(
+      group["include-all"] ||
+        group["include-all-proxies"] ||
+        group["include-all-providers"]
     );
 
-    return {
+    // 没有任何可用入口节点：降级为可手动查看/切换的 select，而不是生成空组，
+    // 也绝不改建成 url-test——那种情况下 DIRECT 延迟最低会永远胜出，
+    // 依赖该分组的 dialer-proxy 链会被静默降级为「直连」。
+    if (members.length === 0 && useProviders.length === 0 && !includeAll) {
+      return {
+        ...group,
+        type: "select",
+        proxies: ["DIRECT"],
+        hidden: RELAY_GROUP_HIDDEN
+      };
+    }
+
+    const next = {
       ...group,
       type: "url-test",
-      proxies: members.length > 0 ? members : ["DIRECT"],
       url: group.url || RELAY_HEALTH_CHECK_URL,
-      interval: group.interval || HEALTH_CHECK_INTERVAL,
+      interval: group.interval || RELAY_HEALTH_CHECK_INTERVAL,
       timeout: group.timeout || HEALTH_CHECK_TIMEOUT,
       tolerance:
         typeof group.tolerance === "number"
           ? group.tolerance
           : RELAY_URL_TEST_TOLERANCE,
+      "expected-status":
+        group["expected-status"] !== undefined
+          ? group["expected-status"]
+          : HEALTH_CHECK_EXPECTED_STATUS,
+      "max-failed-times": HEALTH_CHECK_MAX_FAILED_TIMES,
       lazy: true,
-      hidden: true
+      hidden: RELAY_GROUP_HIDDEN
     };
+
+    if (members.length > 0) {
+      next.proxies = members;
+    } else {
+      delete next.proxies;
+    }
+
+    if (useProviders.length > 0) {
+      next.use = useProviders;
+    } else {
+      delete next.use;
+    }
+
+    return next;
   });
 
   // 前置分组引用到的其他分组（如专用跳板子组）需一并保留，否则引用悬空。
+  // 隐藏的 select 组在客户端里不可见也就无法切换，会永远停在第一个成员，
+  // 因此把 select 类型的辅助组改建为 url-test，让内核按延迟自动选择。
   const auxGroupNames = new Set();
   const auxGroups = [];
   (function collectAuxGroups(members) {
     for (const member of members) {
       if (auxGroupNames.has(member) || relayGroupNames.has(member)) continue;
+      // 仅包装内置策略的分组会被删除，引用已由其规则改写承担，不再保留。
+      if (builtinWrapperByName.has(member)) continue;
 
       const target = groupMap.get(member);
       if (!target) continue;
 
       auxGroupNames.add(member);
-      auxGroups.push({ ...target, hidden: true });
+
+      const auxMembers = sanitizeMembers(target.proxies);
+      const auxUse = (Array.isArray(target.use) ? target.use : []).filter(
+        (providerName) => providerNames.includes(providerName)
+      );
+      const includeAll = Boolean(
+        target["include-all"] ||
+          target["include-all-proxies"] ||
+          target["include-all-providers"]
+      );
+
+      const next = { ...target, hidden: true };
+
+      if (auxMembers.length === 0 && auxUse.length === 0 && !includeAll) {
+        // 没有可用成员：同样降级为可手动切换的 select，避免生成空组或自动直连。
+        next.type = "select";
+        next.proxies = ["DIRECT"];
+        delete next.use;
+      } else {
+        if (auxMembers.length > 0) {
+          next.proxies = auxMembers;
+        } else {
+          delete next.proxies;
+        }
+
+        if (auxUse.length > 0) {
+          next.use = auxUse;
+        } else {
+          delete next.use;
+        }
+
+        if (!next.type || next.type === "select") {
+          next.type = "url-test";
+          next.url = next.url || RELAY_HEALTH_CHECK_URL;
+          next.interval = next.interval || RELAY_HEALTH_CHECK_INTERVAL;
+          next.timeout = next.timeout || HEALTH_CHECK_TIMEOUT;
+          next["expected-status"] =
+            next["expected-status"] !== undefined
+              ? next["expected-status"]
+              : HEALTH_CHECK_EXPECTED_STATUS;
+          next.tolerance =
+            typeof next.tolerance === "number"
+              ? next.tolerance
+              : RELAY_URL_TEST_TOLERANCE;
+          next["max-failed-times"] = HEALTH_CHECK_MAX_FAILED_TIMES;
+          next.lazy = true;
+        }
+      }
+
+      auxGroups.push(next);
       collectAuxGroups(Array.isArray(target.proxies) ? target.proxies : []);
     }
   })(relayUrlTestGroups.flatMap((group) => group.proxies || []));
@@ -700,7 +893,7 @@ function main(config) {
   }
 
   function rewriteRoutingRule(rule, resolvePolicy) {
-    // SUB-RULE 最后一项是子规则名称，不是出站策略，不应重写。
+    // SUB-RULE 的语法是 SUB-RULE,<匹配条件>,<子规则名>，最后一项是子规则名而非出站策略。
     if (getRuleType(rule) === "SUB-RULE") return rule;
     return rewriteRulePolicy(rule, resolvePolicy);
   }
@@ -717,6 +910,8 @@ function main(config) {
     .map((rule) => rewriteRoutingRule(rule, resolveOldPolicy));
 
   // 重写 sub-rules 内真正的策略字段；保留子规则内部的 MATCH。
+  // 子规则内的 MATCH 同样引用了机场原策略组，必须一并改写为保留策略，
+  // 否则会指向已删除的分组，内核会因引用不存在而拒绝加载配置。
   const subRules = config["sub-rules"];
 
   if (subRules && typeof subRules === "object") {
@@ -771,9 +966,12 @@ function main(config) {
   );
 
   // 基于 MetaCubeX meta-rules-dat（活跃维护）的 GFW 规则集，统一走 🚀 Proxies。
-  // 位置在订阅规则之后、MATCH 之前：订阅的国内直连规则优先命中，
-  // 被墙网站走节点选择，仍未命中的流量由 🐟 Others 兜底。
-  const GFW_RULE_PROVIDER_NAME = "gfw";
+  // 键名固定以保证幂等；加 -mrs 后缀避免与订阅自带的同名 rule-provider 撞车。
+  const GFW_RULE_PROVIDER_NAME = "gfw-mrs";
+  const LEGACY_GFW_RULE_PROVIDER_NAME = "gfw";
+  const GFW_RULE_PROVIDER_URL =
+    "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geosite/gfw.mrs";
+
   const gfwProxyRule = `RULE-SET,${GFW_RULE_PROVIDER_NAME},${NODE_GROUP}`;
 
   // 根据“规则类型 + 匹配对象”去重，移除订阅中的旧冲突规则。
@@ -784,6 +982,27 @@ function main(config) {
     if (parts.length < 2) return null;
 
     return `${parts[0].trim().toUpperCase()},${parts[1].trim().toLowerCase()}`;
+  }
+
+  // 判断一条规则是否为「中国大陆」归属判断（GEOIP/GEOSITE 的 cn 类规则）。
+  // gfw 规则集必须排在它们之前：被墙域名常解析到大陆 IP（CDN 回落），
+  // 若 GEOIP,CN,DIRECT 先命中就会直连，表现为「明明有节点却打不开」。
+  function isCnGeoRule(rule) {
+    if (typeof rule !== "string") return false;
+
+    const parts = rule.split(",");
+    const type = (parts[0] || "").trim().toUpperCase();
+    const payload = (parts[1] || "").trim().toLowerCase();
+
+    if (type === "GEOIP" || type === "SRC-GEOIP") return payload === "cn";
+    if (type === "GEOSITE") {
+      return (
+        payload === "cn" ||
+        payload === "geolocation-cn" ||
+        payload === "tld-cn"
+      );
+    }
+    return false;
   }
 
   const forcedRules = [
@@ -804,6 +1023,13 @@ function main(config) {
     return !key || !forcedRuleKeys.has(key);
   });
 
+  // 把 gfw 规则集插到订阅的第一条中国大陆归属判断之前。
+  const cnGeoIndex = rewrittenRules.findIndex(isCnGeoRule);
+  const rulesBeforeCnGeo =
+    cnGeoIndex < 0 ? rewrittenRules : rewrittenRules.slice(0, cnGeoIndex);
+  const rulesAfterCnGeo =
+    cnGeoIndex < 0 ? [] : rewrittenRules.slice(cnGeoIndex);
+
   // 规则只在这里统一写入一次，避免后续赋值覆盖前面的专用规则。
   config.rules = [
     ...cnAiDirectRules,
@@ -811,37 +1037,107 @@ function main(config) {
     ...speedTestRules,
     ...ipCheckRules,
     ...foreignCommonRules,
-    ...rewrittenRules,
+    ...rulesBeforeCnGeo,
     gfwProxyRule,
+    ...rulesAfterCnGeo,
     `MATCH,${OTHERS_GROUP}`
   ];
 
   // 注入 GFW 规则集（MetaCubeX meta-rules-dat，与订阅自带 rule-providers 同源）。
   // 键名固定，重复执行覆写时覆盖同键，保持幂等。
-  config["rule-providers"] = {
-    ...(config["rule-providers"] || {}),
-    [GFW_RULE_PROVIDER_NAME]: {
-      type: "http",
-      behavior: "domain",
-      format: "mrs",
-      interval: 86400,
-      path: `./ruleset/${GFW_RULE_PROVIDER_NAME}.mrs`,
-      url: "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geosite/gfw.mrs"
-    }
+  const ruleProviders = {
+    ...(config["rule-providers"] &&
+    typeof config["rule-providers"] === "object"
+      ? config["rule-providers"]
+      : {})
   };
 
-  // 所有 http 类型 rule-providers 改为经 🚀 Proxies 下载：
-  // jsdelivr 在国内直连不稳定（TLS 握手超时），走代理可绕开封锁。
-  for (const provider of Object.values(config["rule-providers"])) {
+  // 旧版本曾以 "gfw" 为键注入同一份规则集，升级后清掉，避免留下孤儿 provider。
+  const legacyGfw = ruleProviders[LEGACY_GFW_RULE_PROVIDER_NAME];
+  if (
+    legacyGfw &&
+    typeof legacyGfw === "object" &&
+    legacyGfw.url === GFW_RULE_PROVIDER_URL
+  ) {
+    delete ruleProviders[LEGACY_GFW_RULE_PROVIDER_NAME];
+  }
+
+  ruleProviders[GFW_RULE_PROVIDER_NAME] = {
+    type: "http",
+    behavior: "domain",
+    format: "mrs",
+    interval: 86400,
+    path: `./ruleset/${GFW_RULE_PROVIDER_NAME}.mrs`,
+    url: GFW_RULE_PROVIDER_URL
+  };
+
+  // 判断规则集地址是否属于需要经代理下载的站点。
+  function needsProxyForRuleProvider(url) {
+    if (typeof url !== "string") return false;
+
+    const match = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]+)/i.exec(url);
+    if (!match) return false;
+
+    const host = match[1]
+      .split("@")
+      .pop()
+      .split(":")[0]
+      .toLowerCase();
+
+    return RULE_PROVIDER_PROXY_HOSTS.some(
+      (domain) => host === domain || host.endsWith(`.${domain}`)
+    );
+  }
+
+  // 只把 github / jsdelivr 等国内直连不稳定的规则集改为经 🚀 Proxies 下载：
+  // 全部强制走代理会让国内镜像规则集在代理不可用时一起加载失败。
+  for (const provider of Object.values(ruleProviders)) {
     if (!provider || typeof provider !== "object") continue;
     if (provider.type !== "http") continue;
+
+    // 订阅已指定 proxy 时尊重原设置，但若指向已被删除的原分组，改写为保留策略。
+    if (typeof provider.proxy === "string" && provider.proxy) {
+      const target = provider.proxy;
+      if (builtinWrapperByName.has(target)) {
+        provider.proxy = builtinWrapperByName.get(target);
+      } else if (
+        originalGroupNames.has(target) &&
+        !relayGroupNames.has(target) &&
+        !auxGroupNames.has(target)
+      ) {
+        provider.proxy = NODE_GROUP;
+      }
+      continue;
+    }
+
+    if (!needsProxyForRuleProvider(provider.url)) continue;
 
     provider.proxy = NODE_GROUP;
   }
 
+  config["rule-providers"] = ruleProviders;
+
   // ========================
   // 七、通用性能与持久化优化
   // ========================
+
+  // 部分订阅会为代理集合指定 proxy；若它指向已被删除的原分组，
+  // 改写为保留策略，避免 provider 下载时引用悬空。
+  for (const provider of Object.values(providers)) {
+    if (!provider || typeof provider !== "object") continue;
+    if (typeof provider.proxy !== "string" || !provider.proxy) continue;
+
+    const target = provider.proxy;
+    if (builtinWrapperByName.has(target)) {
+      provider.proxy = builtinWrapperByName.get(target);
+    } else if (
+      originalGroupNames.has(target) &&
+      !relayGroupNames.has(target) &&
+      !auxGroupNames.has(target)
+    ) {
+      provider.proxy = NODE_GROUP;
+    }
+  }
 
   // 关闭 IPv6，避免本地、路由器或机场 IPv6 不稳定导致连接异常。
   config.ipv6 = ENABLE_IPV6;

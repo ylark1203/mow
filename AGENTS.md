@@ -8,13 +8,14 @@
 
 主要功能：
 
-- 强制将策略组精简为四个：`🚀 Proxies`（select，全部节点）、`🇺🇸 US`（select，按名称正则筛选美国节点）、`🔄 Fallback`（fallback，自动切换健康节点）、`🐟 Others`（select，未命中规则的兜底出口，成员为 DIRECT、`🚀 Proxies` 与全部节点，选中 `🚀 Proxies` 即兜底跟随节点选择）。不自定义 `GLOBAL` 分组，由 Mihomo 内置 GLOBAL 兜底。
-- 前置/中转/跳板分组（按名称正则 `RELAY_GROUP_REGEX` 或节点 `dialer-proxy` 引用识别）不删除，改建为 `url-test`（`hidden: true` 隐藏）附在四个固定分组之后，由内核自动选择延迟最低的前置节点；前置节点仅作入口，从四个固定出口分组的成员中排除。前置分组必须保留：出口节点的 `dialer-proxy` 引用它，删除会导致配置失效。测速地址沿用原分组配置，缺省用国内可达的 `RELAY_HEALTH_CHECK_URL`（中转节点在国内，用 gstatic 会被全部误判失败）；成员中纯内置策略及其包装组（如「关闭」→DIRECT）会被剔除。前置分组引用到的其他分组递归保留并隐藏。
-- 仅包装内置策略的分组（如「拦截」→[REJECT]、「不拦截」→[PASS]，含成员全是此类分组的开关组如「🛑 广告拦截」）会被删除，规则引用改写为解析出的内置策略（多个内置策略时按 REJECT > REJECT-DROP > PASS > DIRECT 优先）。
-- 为所有 proxy-provider 强制开启健康检查。
-- 重写路由规则中引用已删除策略组的策略名（兼容 `SUB-RULE` 与 `no-resolve` 后缀），删除旧 `MATCH` 规则并在末尾统一追加 `MATCH,🐟 Others`。
+- 强制将策略组精简为四个：`🚀 Proxies`（select，全部节点，**首位为 `🔄 Fallback`**，新装配置默认即自动故障转移，选中具体节点则回到手动模式）、`🇺🇸 US`（select，按名称正则筛选美国节点；**刻意不设兜底成员**，筛不到美国节点时应表现为无可用出口而不是静默回落）、`🔄 Fallback`（fallback，自动切换健康节点）、`🐟 Others`（select，未命中规则的兜底出口，成员为 DIRECT、`🚀 Proxies`、`🔄 Fallback` 与全部节点）。不自定义 `GLOBAL` 分组，由 Mihomo 内置 GLOBAL 兜底。
+- 前置/中转/跳板分组不删除，改建为 `url-test` 附在四个固定分组之后，由内核自动选择延迟最低的前置节点。识别条件：节点 `dialer-proxy` 引用（强证据），或名称命中 `RELAY_GROUP_REGEX` **且未被任何规则引用**（名称命中只是弱证据，机场常把总组命名为「中转专线」）。可见性由 `RELAY_GROUP_HIDDEN`（默认 `false`）控制：入口全挂时出口节点仍显示「可用」，只有入口分组能反映真实链路状态。测速地址沿用原分组配置，缺省用国内可达的 `RELAY_HEALTH_CHECK_URL`（中转节点在国内，用 gstatic 会被全部误判失败）；间隔缺省 `RELAY_HEALTH_CHECK_INTERVAL`（60 秒，比出口更快发现入口故障）。前置节点仅作入口，从四个固定出口分组的成员中排除；前置分组引用的 provider 也从出口组的 `use` 中排除。**成员为空时绝不补 `DIRECT`**：`DIRECT` 延迟最低会被 `url-test` 永远选中，依赖该分组的 `dialer-proxy` 链会被静默降级为直连。无可用成员时降级为可手动切换的 `select`。前置分组引用到的其他分组递归保留并隐藏；其中的 `select` 组改建为 `url-test`（隐藏的 `select` 无法切换，会永远停在第一个成员）。
+- 仅包装内置策略的分组（如「拦截」→[REJECT]、「不拦截」→[PASS]，含成员全是此类分组的开关组如「🛑 广告拦截」）会被删除，规则引用改写为解析出的内置策略（多个内置策略时按 REJECT > REJECT-DROP > PASS > DIRECT 优先）。带 `include-all` 的分组不会被当作纯内置包装组删除。
+- 同名节点去重（保留第一个）：Mihomo 遇到重名节点会判定整份配置非法（`proxy xxx is the duplicate name`）。
+- 为所有 proxy-provider 强制开启健康检查，并兼容订阅的驼峰 `healthCheck` 写法（内核只认中划线 `health-check`，两者并存时订阅自带的测速地址会被静默丢弃）。`lazy` 缺省由 `PROVIDER_HEALTH_CHECK_LAZY` 控制。
+- 重写路由规则中引用已删除策略组的策略名（兼容 `SUB-RULE` 与 `no-resolve` 后缀），删除旧 `MATCH` 规则并在末尾统一追加 `MATCH,🐟 Others`。`sub-rules` 内的策略（含其中的 `MATCH`）一并改写，否则会指向已删除分组导致内核拒绝加载。
 - 在中国大陆 AI 产品主站（DeepSeek、Kimi、豆包等）置顶 DIRECT 分流规则；ChatGPT/OpenAI 域名走 `🇺🇸 US`；常用测速网站与常用国外网站（`FOREIGN_COMMON_DOMAINS`：Google、YouTube、X、GitHub 等）走 `🚀 Proxies`。
-- 注入 GFW 规则集（rule-provider `gfw`，引用活跃维护的 MetaCubeX meta-rules-dat `geosite/gfw.mrs`，`RULE-SET` 规则位于订阅规则之后、`MATCH` 之前），被墙网站统一走 `🚀 Proxies`；覆写保留订阅自带的 rule-providers，注入键固定以保证幂等。所有 http 类型 rule-providers 统一加 `proxy: 🚀 Proxies` 经代理下载，绕过 jsdelivr 国内直连的 TLS 超时问题。
+- 注入 GFW 规则集（rule-provider 键名 `gfw-mrs`，引用活跃维护的 MetaCubeX meta-rules-dat `geosite/gfw.mrs`），被墙网站统一走 `🚀 Proxies`。`RULE-SET` 规则插到订阅的**第一条中国大陆归属判断之前**（`GEOIP,CN` / `GEOSITE,cn` 等）：被墙域名常解析到大陆 IP（CDN 回落），若 `GEOIP,CN,DIRECT` 先命中就会直连打不开；其余规则顺序不变，`MATCH` 仍在最后。覆写保留订阅自带的 rule-providers，注入键固定以保证幂等；旧版本的 `gfw` 键在 URL 一致时会被清理。只有 URL 命中 `RULE_PROVIDER_PROXY_HOSTS`（github / jsdelivr 等国内直连不稳的站点）的 http 类型 rule-providers 才加 `proxy: 🚀 Proxies`，国内镜像保持直连。
 - 开启 `unified-delay`、`tcp-concurrent` 和策略选择持久化（`profile.store-selected` / `store-fake-ip`）。
 
 ## 技术栈与运行时
@@ -28,13 +29,13 @@
 
 `overwrite.js` 单文件按注释编号分为七个部分：
 
-1. 一、用户可调参数：策略组名称常量、`MANUAL_AIRPORT_GROUP`（机场总策略组手动指定）、`ENABLE_IPV6`、健康检查参数、中国大陆 AI 域名列表、美国节点识别正则、前置分组识别正则 `RELAY_GROUP_REGEX`、前置分组默认测速地址 `RELAY_HEALTH_CHECK_URL` 与 `RELAY_URL_TEST_TOLERANCE`。
-2. 二、读取原始配置：解析 rules、proxies、proxy-groups、proxy-providers。
-3. 三、为 provider 开启健康检查。
-4. 四、识别机场原策略组（`detectAirportGroup`，含递归统计可达节点 `collectReachableNodes`）。
-5. 五、创建四个策略组并覆写 `config["proxy-groups"]`。
-6. 六、重写规则策略引用并追加专用分流规则（`config.rules` 只在此处统一写入一次，勿拆分赋值）。
-7. 七、通用性能与持久化优化（含 `config.ipv6`，**不覆写 `config.dns`**，DNS 完全沿用订阅或客户端默认配置）。
+1. 一、用户可调参数：策略组名称常量、`MANUAL_AIRPORT_GROUP`（机场总策略组手动指定）、`ENABLE_IPV6`、健康检查参数（含 `PROVIDER_HEALTH_CHECK_LAZY`）、中国大陆 AI 域名列表、美国节点识别正则、前置分组识别正则 `RELAY_GROUP_REGEX`、前置分组默认测速地址 `RELAY_HEALTH_CHECK_URL`、测速间隔 `RELAY_HEALTH_CHECK_INTERVAL`、`RELAY_URL_TEST_TOLERANCE`、`RELAY_GROUP_HIDDEN`、`RULE_PROVIDER_PROXY_HOSTS`。
+2. 二、读取原始配置：解析 rules、proxies、proxy-groups、proxy-providers；**同名节点去重**；规则读取辅助（`getRuleType` / `stripNoResolve` / `extractPolicy`）与 `policyUsage`（策略被规则引用次数）也在此计算，供第四、六章复用。
+3. 三、为 provider 开启健康检查（含驼峰 `healthCheck` 归一化）。
+4. 四、识别机场原策略组（`detectAirportGroup`，含递归统计可达节点 `collectReachableNodes`；评分权重：规则引用次数 > `include-all` > provider 数 > 静态可达节点数）。
+5. 五、创建四个策略组并覆写 `config["proxy-groups"]`；含 `sanitizeMembers`（成员白名单，剔除内置策略与包装组）、`relayUrlTestGroups`、`auxGroups`。
+6. 六、重写规则策略引用并追加专用分流规则（`config.rules` 只在此处统一写入一次，勿拆分赋值）；`gfw` 规则集的插入位置由 `isCnGeoRule` 决定。
+7. 七、通用性能与持久化优化（含 `config.ipv6`、`proxy-providers[].proxy` 的悬空引用改写，**不覆写 `config.dns`**，DNS 完全沿用订阅或客户端默认配置）。
 
 ## 开发与测试约定
 
