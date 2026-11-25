@@ -164,6 +164,18 @@ function main(config) {
     "notion.so"
   ];
 
+  // GitHub 相关域名。
+  // 关键词规则兜住所有含 "github" 的域名：Release 产物与 Issue/README 图片托管在
+  // github-production-*-asset-*.s3.amazonaws.com 上，后缀规则无法命中；
+  // 这些资源不代理时浏览器会一直等它们，表现为「GitHub 加载很慢、页面一直转圈」。
+  const GITHUB_KEYWORD = "github";
+
+  // 不含 "github" 关键词但同样属于 GitHub 工作流的站点。
+  const GITHUB_RELATED_DOMAINS = [
+    "ghcr.io", // GitHub 容器镜像
+    "vscode.dev" // 网页版 VS Code（github.dev 内的编辑器）
+  ];
+
   // 用于识别美国节点名称。
   const US_NODE_REGEX =
     /(?:🇺🇸|美国|美國|United\s*States|America|\bUSA?\b|洛杉矶|洛杉磯|圣何塞|聖何塞|西雅图|西雅圖|纽约|紐約|达拉斯|達拉斯|芝加哥|凤凰城|鳳凰城|硅谷|矽谷|波特兰|波特蘭|迈阿密|邁阿密|华盛顿|華盛頓|费城|費城|亚特兰大|亞特蘭大|波士顿|波士頓|拉斯维加斯|拉斯維加斯|丹佛|盐湖城|鹽湖城|休斯顿|休士頓)/i;
@@ -965,6 +977,14 @@ function main(config) {
     (domain) => `DOMAIN-SUFFIX,${domain},${NODE_GROUP}`
   );
 
+  // GitHub 及其静态资源统一走 🚀 Proxies，避免子资源走直连把页面拖住。
+  const githubRules = [
+    `DOMAIN-KEYWORD,${GITHUB_KEYWORD},${NODE_GROUP}`,
+    ...GITHUB_RELATED_DOMAINS.map(
+      (domain) => `DOMAIN-SUFFIX,${domain},${NODE_GROUP}`
+    )
+  ];
+
   // 基于 MetaCubeX meta-rules-dat（活跃维护）的 GFW 规则集，统一走 🚀 Proxies。
   // 键名固定以保证幂等；加 -mrs 后缀避免与订阅自带的同名 rule-provider 撞车。
   const GFW_RULE_PROVIDER_NAME = "gfw-mrs";
@@ -1011,6 +1031,7 @@ function main(config) {
     ...speedTestRules,
     ...ipCheckRules,
     ...foreignCommonRules,
+    ...githubRules,
     gfwProxyRule
   ];
 
@@ -1037,6 +1058,7 @@ function main(config) {
     ...speedTestRules,
     ...ipCheckRules,
     ...foreignCommonRules,
+    ...githubRules,
     ...rulesBeforeCnGeo,
     gfwProxyRule,
     ...rulesAfterCnGeo,

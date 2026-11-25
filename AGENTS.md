@@ -14,7 +14,8 @@
 - 同名节点去重（保留第一个）：Mihomo 遇到重名节点会判定整份配置非法（`proxy xxx is the duplicate name`）。
 - 为所有 proxy-provider 强制开启健康检查，并兼容订阅的驼峰 `healthCheck` 写法（内核只认中划线 `health-check`，两者并存时订阅自带的测速地址会被静默丢弃）。`lazy` 缺省由 `PROVIDER_HEALTH_CHECK_LAZY` 控制。
 - 重写路由规则中引用已删除策略组的策略名（兼容 `SUB-RULE` 与 `no-resolve` 后缀），删除旧 `MATCH` 规则并在末尾统一追加 `MATCH,🐟 Others`。`sub-rules` 内的策略（含其中的 `MATCH`）一并改写，否则会指向已删除分组导致内核拒绝加载。
-- 在中国大陆 AI 产品主站（DeepSeek、Kimi、豆包等）置顶 DIRECT 分流规则；ChatGPT/OpenAI 域名走 `🇺🇸 US`；常用测速网站与常用国外网站（`FOREIGN_COMMON_DOMAINS`：Google、YouTube、X、GitHub 等）走 `🚀 Proxies`。
+- 在中国大陆 AI 产品主站（DeepSeek、Kimi、豆包等）置顶 DIRECT 分流规则；ChatGPT/OpenAI 域名走 `🇺🇸 US`；常用测速网站与常用国外网站（`FOREIGN_COMMON_DOMAINS`：Google、YouTube、X 等）走 `🚀 Proxies`。
+- GitHub 单独用 `DOMAIN-KEYWORD,github`（`GITHUB_KEYWORD`）覆盖全部含 `github` 的域名，再补 `GITHUB_RELATED_DOMAINS`（`ghcr.io`、`vscode.dev`）。原因：Release 产物与 Issue/README 图片托管在 `github-production-*-asset-*.s3.amazonaws.com`，后缀规则命中不了；这些子资源落到 `🐟 Others`（首位 DIRECT）就会直连，浏览器一直等它们，表现为「GitHub 加载很慢、页面转圈」。
 - 注入 GFW 规则集（rule-provider 键名 `gfw-mrs`，引用活跃维护的 MetaCubeX meta-rules-dat `geosite/gfw.mrs`），被墙网站统一走 `🚀 Proxies`。`RULE-SET` 规则插到订阅的**第一条中国大陆归属判断之前**（`GEOIP,CN` / `GEOSITE,cn` 等）：被墙域名常解析到大陆 IP（CDN 回落），若 `GEOIP,CN,DIRECT` 先命中就会直连打不开；其余规则顺序不变，`MATCH` 仍在最后。覆写保留订阅自带的 rule-providers，注入键固定以保证幂等；旧版本的 `gfw` 键在 URL 一致时会被清理。只有 URL 命中 `RULE_PROVIDER_PROXY_HOSTS`（github / jsdelivr 等国内直连不稳的站点）的 http 类型 rule-providers 才加 `proxy: 🚀 Proxies`，国内镜像保持直连。
 - 开启 `unified-delay`、`tcp-concurrent` 和策略选择持久化（`profile.store-selected` / `store-fake-ip`）。
 
@@ -29,7 +30,7 @@
 
 `overwrite.js` 单文件按注释编号分为七个部分：
 
-1. 一、用户可调参数：策略组名称常量、`MANUAL_AIRPORT_GROUP`（机场总策略组手动指定）、`ENABLE_IPV6`、健康检查参数（含 `PROVIDER_HEALTH_CHECK_LAZY`）、中国大陆 AI 域名列表、美国节点识别正则、前置分组识别正则 `RELAY_GROUP_REGEX`、前置分组默认测速地址 `RELAY_HEALTH_CHECK_URL`、测速间隔 `RELAY_HEALTH_CHECK_INTERVAL`、`RELAY_URL_TEST_TOLERANCE`、`RELAY_GROUP_HIDDEN`、`RULE_PROVIDER_PROXY_HOSTS`。
+1. 一、用户可调参数：策略组名称常量、`MANUAL_AIRPORT_GROUP`（机场总策略组手动指定）、`ENABLE_IPV6`、健康检查参数（含 `PROVIDER_HEALTH_CHECK_LAZY`）、中国大陆 AI 域名列表、`GITHUB_KEYWORD` / `GITHUB_RELATED_DOMAINS`、美国节点识别正则、前置分组识别正则 `RELAY_GROUP_REGEX`、前置分组默认测速地址 `RELAY_HEALTH_CHECK_URL`、测速间隔 `RELAY_HEALTH_CHECK_INTERVAL`、`RELAY_URL_TEST_TOLERANCE`、`RELAY_GROUP_HIDDEN`、`RULE_PROVIDER_PROXY_HOSTS`。
 2. 二、读取原始配置：解析 rules、proxies、proxy-groups、proxy-providers；**同名节点去重**；规则读取辅助（`getRuleType` / `stripNoResolve` / `extractPolicy`）与 `policyUsage`（策略被规则引用次数）也在此计算，供第四、六章复用。
 3. 三、为 provider 开启健康检查（含驼峰 `healthCheck` 归一化）。
 4. 四、识别机场原策略组（`detectAirportGroup`，含递归统计可达节点 `collectReachableNodes`；评分权重：规则引用次数 > `include-all` > provider 数 > 静态可达节点数）。
